@@ -8,3 +8,5 @@ Thumbs.db
 .env.*
 coverage/
 .cache/
+src/renderer/app.bundle.js
+src/renderer/vendor/spessasynth_processor.min.js
