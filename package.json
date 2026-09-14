@@ -1,16 +1,21 @@
 {
   "name": "openkrk",
-  "version": "0.1.0-dev",
+  "version": "0.2.0-dev",
   "private": false,
   "description": "Open-source karaoke machine with BGV-first presentation, MIDI/KAR playback, precise lyrics and large-library indexing.",
   "main": "src/main/main.cjs",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && node --check src/renderer/app.js"
+    "build:renderer": "node tools/build-renderer.mjs",
+    "start": "npm run build:renderer && electron .",
+    "dev": "npm run build:renderer && electron . --dev",
+    "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && npm run build:renderer"
+  },
+  "dependencies": {
+    "spessasynth_lib": "^4.3.14"
   },
   "devDependencies": {
-    "electron": "^43.4.1"
+    "electron": "^43.4.1",
+    "esbuild": "^0.25.9"
   },
   "engines": {
     "node": ">=22.12.0"
