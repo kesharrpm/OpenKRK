@@ -1,0 +1,19 @@
+name: Production checks
+
+on:
+  push:
+    branches: [main, production/beta]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm install --include=dev
+      - run: npm run check
