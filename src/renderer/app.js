@@ -59,40 +59,39 @@
     return new Intl.NumberFormat().format(Number(value) || 0);
   }
 
+  function updateVisualUi() {
+    bgvStatus.textContent = bgvFiles.length ? `${formatCount(bgvFiles.length)} VISUALS` : 'BGV OFF';
+  }
+
   function updateLibraryUi(status = {}) {
     libraryCount = Number(status.count) || 0;
     libraryStatus.textContent = libraryCount ? `${formatCount(libraryCount)} SONGS` : 'NO LIBRARY';
 
+    if (typeof status.visualCount === 'number' && !bgvFiles.length && status.visualCount > 0) {
+      bgvStatus.textContent = `${formatCount(status.visualCount)} VISUALS`;
+    }
+
     if (status.scanning) {
       roomState.textContent = 'INDEXING';
       roomHint.textContent = `${formatCount(status.scanned)} files checked`;
-      tickerPrimary.textContent = 'Building your local songbook…';
-      tickerSecondary.textContent = `${formatCount(status.count || status.songs)} karaoke files found so far`;
+      tickerPrimary.textContent = 'Reading songs and visuals from one media folder…';
+      tickerSecondary.textContent = `${formatCount(status.count || status.songs)} songs · ${formatCount(status.visualCount || status.visuals)} visuals found so far`;
     } else if (libraryCount) {
       roomState.textContent = 'ROOM READY';
-      roomHint.textContent = 'Type a song number or press F1 to search';
+      roomHint.textContent = 'Type any song number or press F1 to search';
       tickerPrimary.textContent = `${formatCount(libraryCount)} songs indexed locally`;
-      tickerSecondary.textContent = status.root || 'Local MIDI / KAR library';
+      tickerSecondary.textContent = status.root || 'Local mixed karaoke media folder';
     } else {
-      roomState.textContent = 'LIBRARY NEEDED';
-      roomHint.textContent = 'F2 · choose your MIDI/KAR library';
-      tickerPrimary.textContent = 'Point OpenKRK at your karaoke folder.';
-      tickerSecondary.textContent = 'Your MID / MIDI / KAR files can stay anywhere on your drives.';
+      roomState.textContent = 'MEDIA NEEDED';
+      roomHint.textContent = 'F2 · choose the folder containing your songs and BGVs';
+      tickerPrimary.textContent = 'Point OpenKRK at your karaoke media folder.';
+      tickerSecondary.textContent = 'MID / MIDI / KAR and video BGVs can live together in the same folder tree.';
     }
   }
 
   async function refreshLibraryStatus() {
     const status = await window.openkrk?.getLibraryStatus?.();
     if (status) updateLibraryUi(status);
-  }
-
-  async function chooseLibraryFolder() {
-    if (!window.openkrk?.chooseLibraryFolder) return;
-    showToast('Choose the folder that contains your MID / KAR files');
-    const result = await window.openkrk.chooseLibraryFolder();
-    if (!result || result.canceled) return;
-    await refreshLibraryStatus();
-    showToast(`${formatCount(result.count)} songs indexed`);
   }
 
   function localFileUrl(filePath) {
@@ -108,24 +107,49 @@
     bgv.play().catch(() => {});
   }
 
+  async function refreshVisuals(playIfIdle = false) {
+    const files = await window.openkrk?.getVisuals?.();
+    if (!Array.isArray(files)) return;
+    bgvFiles = files;
+    updateVisualUi();
+    if (playIfIdle && bgvFiles.length) playBgv(Math.floor(Math.random() * bgvFiles.length));
+  }
+
+  async function chooseLibraryFolder() {
+    if (!window.openkrk?.chooseLibraryFolder) return;
+    showToast('Choose the folder containing your MID/KAR files and BGV videos');
+    const result = await window.openkrk.chooseLibraryFolder();
+    if (!result || result.canceled) return;
+
+    if (Array.isArray(result.visuals)) {
+      bgvFiles = result.visuals;
+      updateVisualUi();
+      if (bgvFiles.length) playBgv(Math.floor(Math.random() * bgvFiles.length));
+    } else {
+      await refreshVisuals(true);
+    }
+
+    await refreshLibraryStatus();
+    showToast(`${formatCount(result.count)} songs · ${formatCount(result.visualCount)} visuals indexed`);
+  }
+
   async function chooseBgvFolder() {
     if (!window.openkrk?.chooseBgvFolder) return;
     const result = await window.openkrk.chooseBgvFolder();
     if (!result || result.canceled) return;
     bgvFiles = Array.isArray(result.files) ? result.files : [];
+    updateVisualUi();
     if (!bgvFiles.length) {
-      bgvStatus.textContent = 'BGV EMPTY';
       showToast('No supported videos found in that folder');
       return;
     }
-    bgvStatus.textContent = `${formatCount(bgvFiles.length)} VISUALS`;
     showToast(`${formatCount(bgvFiles.length)} BGVs ready`);
     playBgv(Math.floor(Math.random() * bgvFiles.length));
   }
 
   function openSearch() {
     setMode('search');
-    renderSearchMessage(libraryCount ? 'Start typing to search your local library.' : 'Press F2 after closing search to choose your MIDI/KAR folder.');
+    renderSearchMessage(libraryCount ? 'Start typing to search your local library.' : 'Press F2 after closing search to choose your mixed media folder.');
     searchMeta.textContent = libraryCount ? `${formatCount(libraryCount)} SONGS INDEXED` : 'NO LIBRARY INDEXED';
   }
 
@@ -160,6 +184,8 @@
       const code = document.createElement('span');
       code.className = 'search-row-code';
       code.textContent = song.code || '—';
+      if (song.generatedCode) code.dataset.local = 'true';
+      code.title = song.generatedCode ? 'OpenKRK local song number' : 'Song number';
 
       const copy = document.createElement('div');
       copy.className = 'search-row-copy';
@@ -171,17 +197,23 @@
 
       const ext = document.createElement('span');
       ext.className = 'search-row-ext';
-      ext.textContent = String(song.ext || '').replace('.', '').toUpperCase();
+      ext.textContent = song.generatedCode
+        ? `LOCAL · ${String(song.ext || '').replace('.', '').toUpperCase()}`
+        : String(song.ext || '').replace('.', '').toUpperCase();
+
+      const acceptSong = () => {
+        codeBuffer = String(song.code || '');
+        renderCode();
+        closeSearch();
+        showToast(`${song.generatedCode ? 'LOCAL ' : ''}${song.code} · ${song.title}`);
+      };
 
       row.append(code, copy, ext);
-      row.addEventListener('click', () => {
-        if (song.code) {
-          codeBuffer = song.code;
-          renderCode();
-          closeSearch();
-          showToast(`${song.code} · ${song.title}`);
-        } else {
-          showToast(`${song.title} · no song number in filename`);
+      row.addEventListener('click', acceptSong);
+      row.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          acceptSong();
         }
       });
       searchResults.appendChild(row);
@@ -206,12 +238,12 @@
     clearCode();
 
     if (!song) {
-      showToast(libraryCount ? `Song ${selected} was not found` : 'Choose your MIDI/KAR library with F2 first');
+      showToast(libraryCount ? `Song ${selected} was not found` : 'Choose your media folder with F2 first');
       return;
     }
 
     if (!immediate) {
-      showToast(`RESERVED · ${song.code} · ${song.title}`);
+      showToast(`RESERVED · ${song.generatedCode ? 'LOCAL ' : ''}${song.code} · ${song.title}`);
       return;
     }
 
@@ -220,7 +252,7 @@
     document.getElementById('nowArtist').textContent = song.artist || 'Unknown Artist';
     document.getElementById('lyricCurrent').textContent = 'MIDI playback engine is the next production layer';
     setMode('player');
-    showToast('Song resolved from your real library');
+    showToast(song.generatedCode ? 'Local-number song resolved from your library' : 'Song resolved from your library');
   }
 
   searchInput.addEventListener('input', () => {
@@ -309,14 +341,18 @@
   window.openkrk?.onLibraryProgress?.(progress => {
     updateLibraryUi({
       count: progress.songs || 0,
+      visualCount: progress.visuals || 0,
       scanning: progress.scanning,
       scanned: progress.scanned,
       root: progress.root
     });
-    if (progress.done) refreshLibraryStatus();
+    if (progress.done) {
+      refreshLibraryStatus();
+      refreshVisuals(true);
+    }
     if (progress.error) showToast(`Library scan failed · ${progress.error}`, 5000);
   });
 
   renderCode();
-  refreshLibraryStatus();
+  Promise.all([refreshLibraryStatus(), refreshVisuals(true)]).catch(() => {});
 })();
