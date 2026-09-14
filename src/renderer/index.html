@@ -20,17 +20,14 @@
         <div class="brand-type"><b>OPENKRK</b><span>ROOM SYSTEM</span></div>
       </div>
       <div class="head-status">
-        <span id="libraryStatus">NO LIBRARY</span>
-        <i></i>
-        <span id="bgvStatus">BGV OFF</span>
+        <span id="libraryStatus">NO LIBRARY</span><i></i>
+        <span id="bgvStatus">BGV OFF</span><i></i>
+        <span id="audioStatus">NO SOUNDBANK</span>
       </div>
     </header>
 
     <section id="idleSurface" class="idle-surface">
-      <div class="channel-mark" aria-hidden="true">
-        <span>01</span>
-        <b>OPEN SESSION</b>
-      </div>
+      <div class="channel-mark" aria-hidden="true"><span>01</span><b>OPEN SESSION</b></div>
 
       <div class="room-caption">
         <span class="room-caption-label">ROOM STATUS</span>
@@ -39,18 +36,16 @@
       </div>
 
       <div id="numberConsole" class="number-console">
-        <div class="number-meta">
-          <span>SONG NUMBER</span>
-          <span id="entryMode">DIRECT ENTRY</span>
-        </div>
+        <div class="number-meta"><span>SONG NUMBER</span><span id="entryMode">DIRECT ENTRY</span></div>
         <div id="codeDisplay" class="code-display">— — — — —</div>
-        <div class="number-help">ENTER RESERVE&nbsp;&nbsp;·&nbsp;&nbsp;CTRL+ENTER OPEN&nbsp;&nbsp;·&nbsp;&nbsp;BACKSPACE CLEAR</div>
+        <div class="number-help">ENTER RESERVE · CTRL+ENTER PLAY · BACKSPACE CLEAR</div>
       </div>
 
       <div class="edge-actions" aria-label="Primary controls">
         <button data-action="search"><kbd>F1</kbd><span>SEARCH</span></button>
         <button data-action="library"><kbd>F2</kbd><span>MEDIA</span></button>
-        <button data-action="bgv"><kbd>F3</kbd><span>VISUALS</span></button>
+        <button data-action="visuals"><kbd>F3</kbd><span>VISUALS</span></button>
+        <button data-action="system"><kbd>F4</kbd><span>SYSTEM</span></button>
         <button data-action="queue"><kbd>Q</kbd><span>QUEUE</span></button>
         <button data-action="fullscreen"><kbd>F11</kbd><span>FULLSCREEN</span></button>
       </div>
@@ -74,7 +69,7 @@
 
       <div class="lyric-zone">
         <div id="lyricPrev" class="lyric lyric-prev"></div>
-        <div id="lyricCurrent" class="lyric lyric-current"></div>
+        <div id="lyricCurrent" class="lyric lyric-current">♪</div>
         <div id="lyricNext" class="lyric lyric-next"></div>
       </div>
 
@@ -82,25 +77,104 @@
         <span id="elapsed">0:00</span>
         <div class="transport-line"><i id="progressFill"></i></div>
         <span id="remaining">-0:00</span>
-        <div class="transport-state"><span>KEY <b id="keyValue">0</b></span><span>TEMPO <b id="tempoValue">0</b></span><span>QUEUE <b id="queueValue">0</b></span></div>
+        <div class="transport-state">
+          <span id="playState">PLAY</span>
+          <span>KEY <b id="keyValue">0</b></span>
+          <span>TEMPO <b id="tempoValue">100%</b></span>
+        </div>
       </div>
     </section>
 
-    <section id="searchSurface" class="search-surface" aria-hidden="true">
+    <section id="searchSurface" class="search-surface panel-surface" aria-hidden="true">
       <div class="search-panel">
-        <div class="search-title">
-          <span>FIND A SONG</span>
-          <button data-action="close-search">ESC&nbsp;&nbsp;CLOSE</button>
-        </div>
+        <div class="panel-title"><span>FIND A SONG</span><button data-action="close-panel">ESC CLOSE</button></div>
         <input id="searchInput" autocomplete="off" spellcheck="false" placeholder="Title, artist, or number" />
         <div id="searchMeta" class="search-meta">INDEXED LIBRARY</div>
         <div id="searchResults" class="search-results"></div>
       </div>
-      <div class="search-sidecopy">OPENKRK / LOCAL SONGBOOK</div>
+      <div class="panel-sidecopy">OPENKRK / LOCAL SONGBOOK</div>
+    </section>
+
+    <section id="visualSurface" class="visual-surface panel-surface" aria-hidden="true">
+      <div class="visual-panel">
+        <div class="panel-title"><span>VISUAL CONTROL</span><button data-action="close-panel">ESC CLOSE</button></div>
+        <div class="visual-summary"><strong id="visualNowCategory">ALL VISUALS</strong><span id="visualNowName">Random rotation</span></div>
+        <div id="visualCategories" class="visual-categories"></div>
+        <div class="visual-actions">
+          <button data-action="visual-random">RANDOM NEXT</button>
+          <button data-action="visual-all">USE ALL</button>
+          <button data-action="visual-source">CHANGE SOURCE</button>
+        </div>
+        <div class="visual-note">Folder names become categories automatically. Videos inside the media root can stay mixed with your MID/KAR files.</div>
+      </div>
+      <div class="panel-sidecopy">F3 / BGV DIRECTOR</div>
+    </section>
+
+    <section id="systemSurface" class="system-surface panel-surface" aria-hidden="true">
+      <div class="system-panel">
+        <div class="panel-title"><span>SYSTEM / ROOM SETUP</span><button data-action="close-panel">ESC CLOSE</button></div>
+
+        <div class="settings-grid">
+          <div class="setting-block setting-wide">
+            <label>SOUNDBANK</label>
+            <strong id="soundBankName">Not selected</strong>
+            <button class="inline-action" data-action="soundbank">CHOOSE SF2 / SF3 / DLS</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="uiScale">SYSTEM UI SIZE <span id="uiScaleValue">100%</span></label>
+            <input id="uiScale" type="range" min="78" max="130" step="1" value="100" />
+          </div>
+
+          <div class="setting-block">
+            <label for="lyricScale">LYRIC SIZE <span id="lyricScaleValue">100%</span></label>
+            <input id="lyricScale" type="range" min="75" max="140" step="1" value="100" />
+          </div>
+
+          <div class="setting-block">
+            <label for="systemFont">SYSTEM FONT</label>
+            <select id="systemFont">
+              <option value="condensed">Condensed</option>
+              <option value="system">System</option>
+              <option value="rounded">Rounded</option>
+              <option value="mono">Mono</option>
+              <option value="serif">Serif</option>
+              <option value="custom">Custom file</option>
+            </select>
+            <button class="inline-action" data-action="system-font-file">CHOOSE FONT FILE</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="lyricFont">LYRIC FONT</label>
+            <select id="lyricFont">
+              <option value="condensed">Condensed</option>
+              <option value="system">System</option>
+              <option value="rounded">Rounded</option>
+              <option value="serif">Serif</option>
+              <option value="mono">Mono</option>
+              <option value="custom">Custom file</option>
+            </select>
+            <button class="inline-action" data-action="lyric-font-file">CHOOSE FONT FILE</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="sfxEnabled">INTERFACE SFX</label>
+            <select id="sfxEnabled"><option value="on">On</option><option value="off">Off</option></select>
+          </div>
+
+          <div class="setting-block">
+            <label for="sfxVolume">SFX LEVEL <span id="sfxVolumeValue">45%</span></label>
+            <input id="sfxVolume" type="range" min="0" max="100" step="1" value="45" />
+          </div>
+        </div>
+
+        <div class="system-hint">SPACE pause/resume · ESC stop/close · F1 search · F2 media · F3 visuals · F4 system</div>
+      </div>
+      <div class="panel-sidecopy">F4 / MACHINE SETUP</div>
     </section>
 
     <div id="toast" class="toast" role="status"></div>
   </main>
-  <script src="./app.js"></script>
+  <script src="./app.bundle.js"></script>
 </body>
 </html>
