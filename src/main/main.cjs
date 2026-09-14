@@ -5,11 +5,15 @@ const fs = require('node:fs');
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m4v']);
 const MIDI_EXTENSIONS = new Set(['.mid', '.midi', '.kar']);
 const MAX_LIBRARY_FILES = 100000;
+const MAX_VISUAL_FILES = 5000;
+const LOCAL_CODE_MIN = 9000000;
+const LOCAL_CODE_RANGE = 1000000;
 
 let songIndex = [];
 let songByCode = new Map();
-let settings = { libraryRoot: '', bgvRoot: '' };
-let scanState = { scanning: false, root: '', scanned: 0, songs: 0 };
+let visualIndex = [];
+let settings = { mediaRoot: '', libraryRoot: '', bgvRoot: '' };
+let scanState = { scanning: false, root: '', scanned: 0, songs: 0, visuals: 0 };
 
 function settingsFile() {
   return path.join(app.getPath('userData'), 'openkrk-settings.json');
@@ -74,12 +78,73 @@ function parseSongFilename(filePath) {
 
   return {
     code,
+    sourceCode: code,
+    generatedCode: false,
     title,
     artist,
     path: filePath,
     ext: ext.toLowerCase(),
     key: normalize(`${code} ${title} ${artist}`)
   };
+}
+
+function hashPath(value) {
+  let hash = 2166136261;
+  const input = String(value).toLowerCase().replace(/\\/g, '/');
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function assignLocalCodes(songs, previousSongs = []) {
+  const previousByPath = new Map();
+  for (const previous of previousSongs) {
+    if (previous?.path && previous?.generatedCode && previous?.code) {
+      previousByPath.set(path.normalize(previous.path).toLowerCase(), String(previous.code));
+    }
+  }
+
+  const used = new Set();
+  for (const song of songs) {
+    if (song.code) used.add(String(song.code));
+  }
+
+  const uncoded = songs
+    .filter(song => !song.code)
+    .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }));
+
+  for (const song of uncoded) {
+    const lookupKey = path.normalize(song.path).toLowerCase();
+    let code = previousByPath.get(lookupKey) || '';
+
+    if (!code || used.has(code)) {
+      let candidate = LOCAL_CODE_MIN + (hashPath(lookupKey) % LOCAL_CODE_RANGE);
+      let attempts = 0;
+      while (used.has(String(candidate)) && attempts < LOCAL_CODE_RANGE) {
+        candidate = LOCAL_CODE_MIN + ((candidate - LOCAL_CODE_MIN + 1) % LOCAL_CODE_RANGE);
+        attempts += 1;
+      }
+      code = String(candidate);
+    }
+
+    song.code = code;
+    song.sourceCode = '';
+    song.generatedCode = true;
+    song.key = normalize(`${code} ${song.title} ${song.artist}`);
+    used.add(code);
+  }
+
+  for (const song of songs) {
+    if (!song.generatedCode) {
+      song.sourceCode = song.sourceCode || song.code || '';
+      song.generatedCode = false;
+      song.key = normalize(`${song.code} ${song.title} ${song.artist}`);
+    }
+  }
+
+  return songs;
 }
 
 function rebuildCodeMap() {
@@ -93,9 +158,19 @@ function loadCachedLibrary() {
   const cached = readJson(libraryCacheFile(), null);
   if (!cached || !cached.root || !Array.isArray(cached.songs)) return;
   if (!fs.existsSync(cached.root)) return;
-  songIndex = cached.songs;
+
+  const normalizedSongs = cached.songs.map(song => ({
+    ...song,
+    sourceCode: song.sourceCode ?? (song.generatedCode ? '' : (song.code || '')),
+    generatedCode: Boolean(song.generatedCode)
+  }));
+
+  songIndex = assignLocalCodes(normalizedSongs, cached.songs);
+  visualIndex = Array.isArray(cached.visuals) ? cached.visuals.filter(file => fs.existsSync(file)) : [];
   rebuildCodeMap();
+  settings.mediaRoot = cached.root;
   settings.libraryRoot = cached.root;
+  if (!settings.bgvRoot) settings.bgvRoot = cached.root;
 }
 
 function createWindow() {
@@ -122,12 +197,13 @@ function createWindow() {
   }
 }
 
-async function collectFiles(root, extensions, limit, onProgress) {
-  const files = [];
+async function collectMedia(root, onProgress) {
+  const midiFiles = [];
+  const videoFiles = [];
   const stack = [root];
   let visited = 0;
 
-  while (stack.length && files.length < limit) {
+  while (stack.length && (midiFiles.length < MAX_LIBRARY_FILES || videoFiles.length < MAX_VISUAL_FILES)) {
     const dir = stack.pop();
     let entries;
     try {
@@ -142,43 +218,87 @@ async function collectFiles(root, extensions, limit, onProgress) {
         stack.push(full);
       } else if (entry.isFile()) {
         visited += 1;
-        if (extensions.has(path.extname(entry.name).toLowerCase())) files.push(full);
+        const ext = path.extname(entry.name).toLowerCase();
+        if (MIDI_EXTENSIONS.has(ext) && midiFiles.length < MAX_LIBRARY_FILES) midiFiles.push(full);
+        if (VIDEO_EXTENSIONS.has(ext) && videoFiles.length < MAX_VISUAL_FILES) videoFiles.push(full);
       }
 
       if (visited % 750 === 0) {
-        onProgress?.({ visited, matched: files.length });
+        onProgress?.({ visited, songs: midiFiles.length, visuals: videoFiles.length });
         await new Promise(resolve => setImmediate(resolve));
       }
-
-      if (files.length >= limit) break;
     }
   }
 
-  onProgress?.({ visited, matched: files.length });
+  onProgress?.({ visited, songs: midiFiles.length, visuals: videoFiles.length });
+  return { midiFiles, videoFiles, visited };
+}
+
+async function collectFiles(root, extensions, limit) {
+  const files = [];
+  const stack = [root];
+  while (stack.length && files.length < limit) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase())) files.push(full);
+      if (files.length >= limit) break;
+    }
+  }
   return files;
 }
 
 async function scanLibrary(root, sender) {
   if (scanState.scanning) return { busy: true, ...scanState };
-  scanState = { scanning: true, root, scanned: 0, songs: 0 };
+  scanState = { scanning: true, root, scanned: 0, songs: 0, visuals: 0 };
   sender?.send('library:scan-progress', scanState);
 
   try {
-    const files = await collectFiles(root, MIDI_EXTENSIONS, MAX_LIBRARY_FILES, progress => {
+    const previousSongs = songIndex;
+    const media = await collectMedia(root, progress => {
       scanState.scanned = progress.visited;
-      scanState.songs = progress.matched;
+      scanState.songs = progress.songs;
+      scanState.visuals = progress.visuals;
       sender?.send('library:scan-progress', { ...scanState });
     });
 
-    songIndex = files.map(parseSongFilename);
+    songIndex = assignLocalCodes(media.midiFiles.map(parseSongFilename), previousSongs);
+    visualIndex = media.videoFiles;
     rebuildCodeMap();
-    settings.libraryRoot = root;
-    writeJson(settingsFile(), settings);
-    writeJson(libraryCacheFile(), { version: 1, root, songs: songIndex });
 
-    scanState = { scanning: false, root, scanned: scanState.scanned, songs: songIndex.length };
+    settings.mediaRoot = root;
+    settings.libraryRoot = root;
+    settings.bgvRoot = root;
+    writeJson(settingsFile(), settings);
+    writeJson(libraryCacheFile(), {
+      version: 2,
+      root,
+      songs: songIndex,
+      visuals: visualIndex
+    });
+
+    scanState = {
+      scanning: false,
+      root,
+      scanned: media.visited,
+      songs: songIndex.length,
+      visuals: visualIndex.length
+    };
     sender?.send('library:scan-progress', { ...scanState, done: true });
-    return { canceled: false, root, count: songIndex.length };
+    return {
+      canceled: false,
+      root,
+      count: songIndex.length,
+      visualCount: visualIndex.length,
+      visuals: visualIndex
+    };
   } catch (error) {
     scanState.scanning = false;
     sender?.send('library:scan-progress', { ...scanState, error: error.message });
@@ -188,7 +308,7 @@ async function scanLibrary(root, sender) {
 
 ipcMain.handle('library:choose-folder', async event => {
   const result = await dialog.showOpenDialog({
-    title: 'Choose your MIDI / KAR library folder',
+    title: 'Choose your OpenKRK media folder (MIDI / KAR + BGV videos)',
     properties: ['openDirectory']
   });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
@@ -196,16 +316,20 @@ ipcMain.handle('library:choose-folder', async event => {
 });
 
 ipcMain.handle('library:rescan', async event => {
-  if (!settings.libraryRoot) return { canceled: true, reason: 'no-root' };
-  return scanLibrary(settings.libraryRoot, event.sender);
+  const root = settings.mediaRoot || settings.libraryRoot;
+  if (!root) return { canceled: true, reason: 'no-root' };
+  return scanLibrary(root, event.sender);
 });
 
 ipcMain.handle('library:status', () => ({
-  root: settings.libraryRoot || '',
+  root: settings.mediaRoot || settings.libraryRoot || '',
   count: songIndex.length,
+  visualCount: visualIndex.length,
   scanning: scanState.scanning,
   scanned: scanState.scanned
 }));
+
+ipcMain.handle('media:visuals', () => visualIndex);
 
 ipcMain.handle('library:find-code', (_event, code) => songByCode.get(String(code || '').trim()) || null);
 
@@ -227,16 +351,22 @@ ipcMain.handle('library:search', (_event, query, limit = 80) => {
 
 ipcMain.handle('bgv:choose-folder', async () => {
   const result = await dialog.showOpenDialog({
-    title: 'Choose your BGV / visual folder',
+    title: 'Choose a different BGV / visual folder',
     properties: ['openDirectory']
   });
   if (result.canceled || !result.filePaths[0]) return { canceled: true, files: [] };
 
   const root = result.filePaths[0];
-  const files = await collectFiles(root, VIDEO_EXTENSIONS, 5000);
+  visualIndex = await collectFiles(root, VIDEO_EXTENSIONS, MAX_VISUAL_FILES);
   settings.bgvRoot = root;
   writeJson(settingsFile(), settings);
-  return { canceled: false, root, files };
+
+  const cached = readJson(libraryCacheFile(), null);
+  if (cached && Array.isArray(cached.songs)) {
+    writeJson(libraryCacheFile(), { ...cached, version: 2, visuals: visualIndex });
+  }
+
+  return { canceled: false, root, files: visualIndex };
 });
 
 ipcMain.handle('app:toggle-fullscreen', event => {
