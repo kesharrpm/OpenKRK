@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('openkrk', {
   chooseLibraryFolder: () => ipcRenderer.invoke('library:choose-folder'),
   rescanLibrary: () => ipcRenderer.invoke('library:rescan'),
   getLibraryStatus: () => ipcRenderer.invoke('library:status'),
+  getVisuals: () => ipcRenderer.invoke('media:visuals'),
   findSongByCode: code => ipcRenderer.invoke('library:find-code', code),
   searchSongs: (query, limit) => ipcRenderer.invoke('library:search', query, limit),
   onLibraryProgress: callback => {
