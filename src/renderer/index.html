@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OpenKRK</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main id="stage" class="stage mode-idle">
+    <video id="bgv" class="bgv" muted autoplay playsinline></video>
+    <div class="bgv-shade" aria-hidden="true"></div>
+    <div class="signal-field" aria-hidden="true"></div>
+
+    <header class="topline">
+      <div class="brand-lockup" aria-label="OpenKRK">
+        <svg class="brand-mark" viewBox="0 0 84 42" aria-hidden="true">
+          <path d="M4 7h27l8 7h16l8-7h17v9H67l-8 7 8 7h13v9H63l-8-7H39l-8 7H4v-9h23l8-7-8-7H4z"/>
+        </svg>
+        <div class="brand-word">
+          <span>OPEN</span><b>KRK</b>
+        </div>
+      </div>
+      <div class="room-state"><span class="pulse-dot"></span><span id="roomState">ROOM READY</span></div>
+    </header>
+
+    <section id="idleSurface" class="idle-surface">
+      <div class="rail rail-left" aria-hidden="true"><span>OPEN SESSION</span><span>LOCAL / OFFLINE</span><span>BGV LIVE</span></div>
+
+      <div class="idle-copy">
+        <p class="eyebrow">YOUR ROOM · YOUR LIBRARY · YOUR SOUND</p>
+        <h1>Make the room<br><em>move.</em></h1>
+        <p class="idle-sub">Type a song number anytime. The screen stays alive while the machine waits.</p>
+      </div>
+
+      <div class="number-console" id="numberConsole">
+        <div class="console-kicker">DIRECT ENTRY</div>
+        <div class="console-code" id="codeDisplay">— — — — —</div>
+        <div class="console-hint">NUMBERS · ENTER TO RESERVE · CTRL+ENTER TO PLAY</div>
+      </div>
+
+      <div class="room-picks">
+        <div class="picks-label">ROOM PICKS</div>
+        <div class="pick-track" id="pickTrack">
+          <span class="pick-active">01&nbsp;&nbsp; Load your BGV folder</span>
+          <span>02&nbsp;&nbsp; Type a song number</span>
+          <span>03&nbsp;&nbsp; Search without leaving the room</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="playerSurface" class="player-surface" aria-hidden="true">
+      <div class="now-bug">
+        <span class="now-label">NOW</span>
+        <span id="nowCode">00000</span>
+        <span class="now-sep">/</span>
+        <strong id="nowTitle">Untitled</strong>
+        <span id="nowArtist">Unknown Artist</span>
+      </div>
+
+      <div class="lyric-zone">
+        <div id="lyricPrev" class="lyric lyric-prev"></div>
+        <div id="lyricCurrent" class="lyric lyric-current" data-text=""></div>
+        <div id="lyricNext" class="lyric lyric-next"></div>
+      </div>
+
+      <div class="playback-ribbon">
+        <div class="ribbon-time"><span id="elapsed">0:00</span><span id="remaining">-0:00</span></div>
+        <div class="ribbon-line"><span id="progressFill"></span></div>
+        <div class="ribbon-meta"><span>KEY <b id="keyValue">0</b></span><span>TEMPO <b id="tempoValue">0</b></span><span>QUEUE <b id="queueValue">0</b></span></div>
+      </div>
+    </section>
+
+    <section id="searchSurface" class="search-surface" aria-hidden="true">
+      <aside class="search-rail">
+        <span class="search-mode">SONG FINDER</span>
+        <button data-action="close-search">BACK</button>
+      </aside>
+      <div class="search-main">
+        <div class="search-head">
+          <label for="searchInput">Find by title, artist, lyrics or code</label>
+          <input id="searchInput" autocomplete="off" spellcheck="false" placeholder="Start typing…" />
+        </div>
+        <div id="searchResults" class="search-results">
+          <div class="empty-result"><span>NO QUERY</span><strong>Your indexed library will appear here.</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="command-dock" aria-label="Primary controls">
+      <button data-action="search"><span>F1</span> FIND</button>
+      <button data-action="bgv"><span>F3</span> BGV</button>
+      <button data-action="queue"><span>Q</span> QUEUE</button>
+      <button data-action="fullscreen"><span>F11</span> FULL</button>
+      <div class="dock-accent" aria-hidden="true"></div>
+    </nav>
+
+    <div id="toast" class="toast" role="status"></div>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
