@@ -19,6 +19,25 @@ const visualNowCategory = $('visualNowCategory');
 const visualNowName = $('visualNowName');
 const soundBankName = $('soundBankName');
 const toast = $('toast');
+const bootSurface = $('bootSurface');
+const bootDetail = $('bootDetail');
+const bootProgress = $('bootProgress');
+const setupSurface = $('setupSurface');
+const setupSongPath = $('setupSongPath');
+const setupSongCount = $('setupSongCount');
+const setupBgvPath = $('setupBgvPath');
+const setupBgvCount = $('setupBgvCount');
+const setupBankPath = $('setupBankPath');
+const setupBankState = $('setupBankState');
+const setupContinue = $('setupContinue');
+const setupHint = $('setupHint');
+const introSurface = $('introSurface');
+const introCountdown = $('introCountdown');
+const introVisualName = $('introVisualName');
+const newSongsList = $('newSongsList');
+const songIntroCard = $('songIntroCard');
+const songCover = $('songCover');
+const songCoverFallback = $('songCoverFallback');
 
 const FONT_STACKS = {
   condensed: '"Bahnschrift SemiCondensed", "Arial Narrow", sans-serif',
@@ -36,7 +55,8 @@ const DEFAULT_PREFS = {
   systemFontPath: '',
   lyricFontPath: '',
   sfxEnabled: true,
-  sfxVolume: 45
+  sfxVolume: 45,
+  romanizedEnabled: true
 };
 
 let prefs = loadPrefs();
@@ -53,6 +73,10 @@ let currentLyricLine = -1;
 let toastTimer = null;
 let searchTimer = null;
 let transportRaf = 0;
+let startupComplete = false;
+let introTimer = null;
+let songIntroTimer = null;
+let lastLibraryStatus = { root: '', bgvRoot: '', count: 0, visualCount: 0 };
 
 function loadPrefs() {
   try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('openkrk-ui-prefs') || '{}') }; }
@@ -86,6 +110,7 @@ function applyPrefs() {
   $('systemFont').value = prefs.systemFont;
   $('lyricFont').value = prefs.lyricFont;
   $('sfxEnabled').value = prefs.sfxEnabled ? 'on' : 'off';
+  $('romanizedEnabled').value = prefs.romanizedEnabled ? 'on' : 'off';
   $('sfxVolume').value = prefs.sfxVolume;
   $('sfxVolumeValue').textContent = `${prefs.sfxVolume}%`;
 }
@@ -118,6 +143,13 @@ class InterfaceSfx {
   confirm() { void this.tone(690, 0.04, 0.032, 'sine'); void this.tone(920, 0.045, 0.025, 'sine', 0.035); }
   back() { void this.tone(330, 0.045, 0.026, 'triangle'); }
   error() { void this.tone(180, 0.07, 0.035, 'square'); }
+  intro() {
+    void this.tone(220, 1.7, 0.02, 'sine', 0);
+    void this.tone(330, 1.6, 0.016, 'sine', 0.14);
+    void this.tone(440, 1.45, 0.012, 'triangle', 0.32);
+    void this.tone(660, 0.28, 0.02, 'sine', 2.9);
+    void this.tone(880, 0.42, 0.016, 'sine', 3.16);
+  }
 }
 const sfx = new InterfaceSfx();
 
@@ -368,10 +400,17 @@ function showToast(message, ms = 2300) {
 function formatCount(value) { return new Intl.NumberFormat().format(Number(value) || 0); }
 function formatTime(value) { const seconds = Math.max(0, Math.floor(Number(value) || 0)); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; }
 function renderCode() { codeDisplay.textContent = codeBuffer ? codeBuffer.split('').join(' ') : '— — — — —'; }
-function pushDigit(digit) { if (mode !== 'idle' && mode !== 'player') return; if (codeBuffer.length >= 7) codeBuffer = ''; codeBuffer += digit; renderCode(); }
+function pushDigit(digit) {
+  if (!startupComplete) return;
+  if (mode !== 'idle' && mode !== 'player') return;
+  if (codeBuffer.length >= 7) codeBuffer = '';
+  codeBuffer += digit;
+  renderCode();
+}
 function clearCode() { codeBuffer = ''; renderCode(); }
 
 function updateLibraryUi(status = {}) {
+  lastLibraryStatus = { ...lastLibraryStatus, ...status };
   libraryCount = Number(status.count) || 0;
   libraryStatus.textContent = libraryCount ? `${formatCount(libraryCount)} SONGS` : 'NO LIBRARY';
   if (typeof status.visualCount === 'number') bgvStatus.textContent = status.visualCount ? `${formatCount(status.visualCount)} VISUALS` : 'BGV OFF';
@@ -392,7 +431,14 @@ function updateLibraryUi(status = {}) {
     tickerSecondary.textContent = 'MID / MIDI / KAR and video BGVs can live together in the same folder tree.';
   }
 }
-async function refreshLibraryStatus() { const status = await window.openkrk?.getLibraryStatus?.(); if (status) updateLibraryUi(status); }
+async function refreshLibraryStatus() {
+  const status = await window.openkrk?.getLibraryStatus?.();
+  if (status) {
+    updateLibraryUi(status);
+    updateSetupUi(status);
+  }
+  return status || null;
+}
 
 function filesForCategory(category = activeVisualCategory) {
   if (!visualCatalog.visuals?.length) return [];
@@ -427,6 +473,8 @@ async function refreshVisualCatalog(playIfIdle = false) {
   bgvStatus.textContent = catalog.count ? `${formatCount(catalog.count)} VISUALS` : 'BGV OFF';
   renderVisualCategories();
   if (playIfIdle && activeVisuals.length) playBgv(Math.floor(Math.random() * activeVisuals.length));
+  updateSetupUi(lastLibraryStatus);
+  return catalog;
 }
 function playBgv(index) {
   activeVisuals = filesForCategory();
@@ -440,12 +488,14 @@ function playBgv(index) {
   visualNowName.textContent = visual.name || 'Untitled visual';
 }
 async function chooseLibraryFolder() {
-  showToast('Choose the folder containing your MID/KAR files and BGV videos');
+  showToast('Choose the folder containing your MID / MIDI / KAR files');
   const result = await window.openkrk?.chooseLibraryFolder?.();
   if (!result || result.canceled) return;
   await Promise.all([refreshLibraryStatus(), refreshVisualCatalog(true)]);
   showToast(`${formatCount(result.count)} songs · ${formatCount(result.visualCount)} visuals indexed`);
   sfx.confirm();
+  await renderLatestSongs();
+  return result;
 }
 async function chooseVisualSource() {
   const result = await window.openkrk?.chooseBgvFolder?.();
@@ -454,6 +504,191 @@ async function chooseVisualSource() {
   await refreshVisualCatalog(true);
   showToast(`${formatCount(result.count)} visuals categorized from folder names`);
   sfx.confirm();
+  updateSetupUi(lastLibraryStatus);
+  return result;
+}
+
+
+function compactPath(value = '') {
+  const text = String(value || '');
+  if (text.length <= 58) return text || 'Not selected';
+  return '…' + text.slice(-57);
+}
+
+function updateSetupUi(status = lastLibraryStatus) {
+  const songs = Number(status?.count) || libraryCount || 0;
+  const visuals = Number(visualCatalog?.count) || Number(status?.visualCount) || 0;
+  setupSongPath.textContent = compactPath(status?.root);
+  setupSongCount.textContent = songs ? formatCount(songs) + ' SONGS READY' : 'NOT CONNECTED';
+  setupBgvPath.textContent = compactPath(visualCatalog?.root || status?.bgvRoot);
+  setupBgvCount.textContent = visuals ? formatCount(visuals) + ' VISUALS READY' : 'OPTIONAL';
+  setupContinue.disabled = songs < 1;
+  setupHint.textContent = songs
+    ? (visuals ? 'Library is ready. Enter the room.' : 'Songs are ready. You can add BGVs now or later with F3.')
+    : 'Add a songs folder to continue.';
+}
+
+function formatFreshDate(value) {
+  const date = new Date(Number(value) || 0);
+  if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return 'LOCAL';
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return 'TODAY';
+  return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' }).toUpperCase();
+}
+
+async function renderLatestSongs() {
+  const rows = await window.openkrk?.getLatestSongs?.(10) || [];
+  newSongsList.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'new-song-empty';
+    empty.textContent = 'No MIDI / KAR songs found yet.';
+    newSongsList.appendChild(empty);
+    return;
+  }
+  rows.forEach((song, index) => {
+    const row = document.createElement('div');
+    row.className = 'new-song-row';
+    row.tabIndex = 0;
+
+    const code = document.createElement('span');
+    code.className = 'new-song-code';
+    code.textContent = song.code || String(index + 1).padStart(2, '0');
+
+    const title = document.createElement('strong');
+    title.className = 'new-song-title';
+    title.textContent = song.title || 'Untitled';
+
+    const artist = document.createElement('span');
+    artist.className = 'new-song-artist';
+    artist.textContent = song.artist || 'Unknown Artist';
+
+    const added = document.createElement('span');
+    added.className = 'new-song-date';
+    added.textContent = formatFreshDate(song.firstSeenAt || song.mtimeMs);
+
+    const accept = () => {
+      codeBuffer = String(song.code || '');
+      renderCode();
+      showToast((song.code || 'LOCAL') + ' · ' + (song.title || 'Untitled'));
+      sfx.confirm();
+    };
+
+    row.append(code, title, artist, added);
+    row.addEventListener('click', accept);
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); accept(); }
+    });
+    newSongsList.appendChild(row);
+  });
+}
+
+function showSetup() {
+  startupComplete = false;
+  bootSurface.classList.add('hidden');
+  setupSurface.classList.add('visible');
+  setupSurface.setAttribute('aria-hidden', 'false');
+  updateSetupUi(lastLibraryStatus);
+}
+
+function hideSetup() {
+  setupSurface.classList.remove('visible');
+  setupSurface.setAttribute('aria-hidden', 'true');
+}
+
+function stopIntroSequence() {
+  if (introTimer) clearTimeout(introTimer);
+  introTimer = null;
+  introSurface.classList.remove('visible');
+  introSurface.setAttribute('aria-hidden', 'true');
+  if (introCountdown) {
+    introCountdown.style.transition = 'none';
+    introCountdown.style.width = '0%';
+  }
+}
+
+async function runIntroSequence() {
+  hideSetup();
+  bootSurface.classList.add('hidden');
+  await refreshVisualCatalog(true);
+  introVisualName.textContent = visualNowName.textContent || (visualCatalog.count ? 'BGV PREVIEW' : 'DEFAULT VISUAL');
+  introSurface.classList.add('visible');
+  introSurface.setAttribute('aria-hidden', 'false');
+  sfx.intro();
+
+  requestAnimationFrame(() => {
+    introCountdown.style.transition = 'width 5s linear';
+    introCountdown.style.width = '100%';
+  });
+
+  await new Promise(resolve => {
+    introTimer = setTimeout(resolve, 5000);
+  });
+  stopIntroSequence();
+  startupComplete = true;
+  await renderLatestSongs();
+  setMode('idle');
+  showToast('ROOM READY · type a song number or press F1');
+}
+
+async function bootstrapRoom() {
+  startupComplete = false;
+  bootDetail.textContent = 'Reading cached library';
+  bootProgress.style.width = '18%';
+
+  const status = await refreshLibraryStatus();
+  bootProgress.style.width = '46%';
+  await refreshVisualCatalog(false);
+  bootProgress.style.width = '68%';
+  await refreshSoundBankStatus();
+  bootProgress.style.width = '88%';
+  updateSetupUi(status || lastLibraryStatus);
+
+  if (!status?.count) {
+    bootDetail.textContent = 'No songs found — media setup required';
+    bootProgress.style.width = '100%';
+    setTimeout(showSetup, 450);
+    return;
+  }
+
+  bootDetail.textContent = formatCount(status.count) + ' songs ready';
+  bootProgress.style.width = '100%';
+  await new Promise(resolve => setTimeout(resolve, 550));
+  await runIntroSequence();
+}
+
+function renderMetadataCard(song, metadata = null) {
+  $('metaTitle').textContent = metadata?.title || song?.title || 'Untitled';
+  $('metaArtist').textContent = metadata?.artist || song?.artist || 'Unknown Artist';
+  $('metaAlbum').textContent = metadata?.album || 'Local MIDI / album not matched';
+  const credits = Array.isArray(metadata?.composers) ? metadata.composers.map(item => item.name + (item.role ? ' · ' + item.role : '')).join(' / ') : '';
+  $('metaCredits').textContent = credits || (metadata?.matched ? 'Credits not listed in matched work' : 'Local metadata only');
+  $('metaReleaseDate').textContent = metadata?.releaseDate || 'LOCAL MIDI';
+
+  const art = metadata?.coverArtUrl || '';
+  songCoverFallback.style.display = '';
+  songCover.removeAttribute('src');
+  if (art) {
+    songCover.onload = () => { songCoverFallback.style.display = 'none'; };
+    songCover.onerror = () => { songCover.removeAttribute('src'); songCoverFallback.style.display = ''; };
+    songCover.src = art;
+  }
+}
+
+function revealSongIntro(song) {
+  clearTimeout(songIntroTimer);
+  renderMetadataCard(song, null);
+  songIntroCard.classList.remove('hidden');
+  songIntroTimer = setTimeout(() => songIntroCard.classList.add('hidden'), 4600);
+
+  window.openkrk?.resolveSongMetadata?.({
+    code: song.code,
+    title: song.title,
+    artist: song.artist
+  }).then(metadata => {
+    if (currentSong !== song) return;
+    renderMetadataCard(song, metadata);
+  }).catch(() => {});
 }
 
 function renderSearchMessage(message) {
@@ -500,11 +735,12 @@ async function performSearch(query) {
 
 function renderLyricLine(index, time) {
   if (!currentLyrics.length || index < 0 || index >= currentLyrics.length) {
-    $('lyricPrev').textContent = ''; $('lyricCurrent').textContent = '♪'; $('lyricNext').textContent = ''; return;
+    $('lyricPrev').textContent = ''; $('lyricCurrent').textContent = '♪'; $('lyricRomanized').textContent = ''; $('lyricNext').textContent = ''; return;
   }
   const line = currentLyrics[index];
   $('lyricPrev').textContent = currentLyrics[index - 1]?.text || '';
   $('lyricNext').textContent = currentLyrics[index + 1]?.text || '';
+  $('lyricRomanized').textContent = prefs.romanizedEnabled ? (line.romanized || '') : '';
   const current = $('lyricCurrent');
   if (currentLyricLine !== index) {
     current.replaceChildren();
@@ -551,6 +787,7 @@ async function playResolvedSong(song) {
     $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = song.title || 'Untitled'; $('nowArtist').textContent = song.artist || 'Unknown Artist';
     $('lyricCurrent').textContent = 'LOADING MIDI…'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
     setMode('player');
+    revealSongIntro(song);
     const binary = await midiEngine.playSong(song);
     currentLyrics = parseMidiLyrics(binary);
     currentLyricLine = -1;
@@ -561,7 +798,7 @@ async function playResolvedSong(song) {
   }
 }
 function stopCurrentSong(withSfx = true) {
-  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; cancelAnimationFrame(transportRaf);
+  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; cancelAnimationFrame(transportRaf); clearTimeout(songIntroTimer); songIntroCard.classList.remove('hidden');
   $('progressFill').style.width = '0%'; $('elapsed').textContent = '0:00'; $('remaining').textContent = '-0:00'; setMode('idle'); if (withSfx) sfx.back();
 }
 async function reserveCode(immediate = false) {
@@ -580,6 +817,9 @@ async function refreshSoundBankStatus() {
   midiEngine.setSoundBankPath(bankPath);
   soundBankName.textContent = status?.name || 'Not selected';
   audioStatus.textContent = status?.name ? 'MIDI READY' : 'NO SOUNDBANK';
+  setupBankPath.textContent = status?.path ? compactPath(status.path) : 'Choose SF2 / SF3 / DLS for MIDI playback';
+  setupBankState.textContent = status?.name ? 'READY · ' + status.name : 'REQUIRED TO PLAY';
+  return status || null;
 }
 async function chooseSoundBank() {
   const result = await window.openkrk?.chooseSoundBank?.();
@@ -587,7 +827,7 @@ async function chooseSoundBank() {
   midiEngine.setSoundBankPath(result.path);
   soundBankName.textContent = result.name;
   audioStatus.textContent = 'LOADING BANK';
-  try { await midiEngine.ensureSoundBank(); audioStatus.textContent = 'MIDI READY'; showToast(`Sound bank ready · ${result.name}`); sfx.confirm(); }
+  try { await midiEngine.ensureSoundBank(); audioStatus.textContent = 'MIDI READY'; setupBankPath.textContent = compactPath(result.path); setupBankState.textContent = 'READY · ' + result.name; showToast(`Sound bank ready · ${result.name}`); sfx.confirm(); }
   catch (error) { audioStatus.textContent = 'BANK ERROR'; showToast(`Sound bank error · ${error.message || error}`, 5000); sfx.error(); }
 }
 async function chooseCustomFont(slot) {
@@ -604,13 +844,16 @@ $('lyricScale').addEventListener('input', event => { prefs.lyricScale = Number(e
 $('systemFont').addEventListener('change', event => { prefs.systemFont = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
 $('lyricFont').addEventListener('change', event => { prefs.lyricFont = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
 $('sfxEnabled').addEventListener('change', event => { prefs.sfxEnabled = event.target.value === 'on'; savePrefs(); if (prefs.sfxEnabled) sfx.confirm(); });
+$('romanizedEnabled').addEventListener('change', event => { prefs.romanizedEnabled = event.target.value === 'on'; savePrefs(); applyPrefs(); sfx.move(); });
 $('sfxVolume').addEventListener('input', event => { prefs.sfxVolume = Number(event.target.value); savePrefs(); applyPrefs(); });
 
 bgv.addEventListener('ended', () => { if (filesForCategory().length) playBgv(bgvIndex + 1); });
 bgv.addEventListener('error', () => { if (filesForCategory().length > 1) playBgv(bgvIndex + 1); });
 window.openkrk?.onLibraryProgress?.(progress => {
   updateLibraryUi({ count: progress.songs || 0, visualCount: progress.visuals || 0, scanning: progress.scanning, scanned: progress.scanned, root: progress.root });
-  if (progress.done) Promise.all([refreshLibraryStatus(), refreshVisualCatalog(true)]).catch(() => {});
+  if (progress.done) Promise.all([refreshLibraryStatus(), refreshVisualCatalog(false), renderLatestSongs()]).catch(() => {});
+  if (bootProgress && progress.scanning) bootProgress.style.width = `${Math.min(92, 20 + Math.log10(Math.max(10, Number(progress.scanned) || 10)) * 20)}%`;
+  if (bootDetail && progress.scanning) bootDetail.textContent = `${formatCount(progress.scanned)} files checked · ${formatCount(progress.songs)} songs`;
   if (progress.error) showToast(`Library scan failed · ${progress.error}`, 5000);
 });
 
@@ -618,7 +861,11 @@ document.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
-  if (action === 'search') openSearch();
+  if (action === 'setup-songs') { sfx.move(); const result = await chooseLibraryFolder(); if (result) updateSetupUi(await refreshLibraryStatus()); }
+  else if (action === 'setup-bgvs') { sfx.move(); await chooseVisualSource(); updateSetupUi(await refreshLibraryStatus()); }
+  else if (action === 'setup-bank') { sfx.move(); await chooseSoundBank(); await refreshSoundBankStatus(); }
+  else if (action === 'setup-continue') { if (!setupContinue.disabled) await runIntroSequence(); }
+  else if (action === 'search') openSearch();
   else if (action === 'library') { sfx.move(); await chooseLibraryFolder(); }
   else if (action === 'visuals') openVisuals();
   else if (action === 'system') openSystem();
@@ -634,6 +881,13 @@ document.addEventListener('click', async event => {
 });
 
 document.addEventListener('keydown', async event => {
+  if (!startupComplete) {
+    if (setupSurface.classList.contains('visible') && event.key === 'Enter' && !setupContinue.disabled) {
+      event.preventDefault();
+      await runIntroSequence();
+    }
+    return;
+  }
   if (mode === 'search') { if (event.key === 'Escape') { event.preventDefault(); closePanel(); } return; }
   if (mode === 'visuals' || mode === 'system') { if (event.key === 'Escape') { event.preventDefault(); closePanel(); } return; }
   if (/^\d$/.test(event.key)) { event.preventDefault(); pushDigit(event.key); sfx.move(); return; }
@@ -650,4 +904,9 @@ document.addEventListener('keydown', async event => {
 
 applyPrefs();
 renderCode();
-Promise.all([refreshLibraryStatus(), refreshVisualCatalog(true), refreshSoundBankStatus()]).catch(error => console.warn(error));
+bootstrapRoom().catch(error => {
+  console.error(error);
+  bootDetail.textContent = 'Startup error · ' + (error.message || error);
+  bootProgress.style.width = '100%';
+  setTimeout(showSetup, 900);
+});
