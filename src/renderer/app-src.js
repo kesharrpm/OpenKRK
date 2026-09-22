@@ -768,7 +768,8 @@ function playBgv(index) {
   bgv.load();
   bgv.play().catch(() => {});
   visualNowCategory.textContent = activeVisualCategory === 'ALL' ? 'ALL VISUALS' : activeVisualCategory.toUpperCase();
-  visualNowName.textContent = visual.name || 'Untitled visual';
+  const displayName = String(visual.name || 'Background video').replace(/\.[^.]+$/, '');
+  visualNowName.textContent = displayName.length > 44 ? displayName.slice(0, 43) + '…' : displayName;
 }
 async function chooseLibraryFolder() {
   showToast('Choose the folder containing your MID / MIDI / KAR files');
@@ -1328,7 +1329,9 @@ document.addEventListener('click', async event => {
   else if (action === 'setup-bgvs') { sfx.move(); await chooseVisualSource(); updateSetupUi(await refreshLibraryStatus()); }
   else if (action === 'setup-bank') { sfx.move(); await chooseSoundBank(); await refreshSoundBankStatus(); }
   else if (action === 'setup-continue') { if (!setupContinue.disabled) await runIntroSequence(); }
-  else if (action === 'refresh-new-songs') { sfx.move(); await renderLatestSongs(true); showToast('NEW SONGS UPDATED'); }
+  else if (action === 'refresh-new-songs') { sfx.move(); await renderLatestSongs(true); showToast('DISCOVERY UPDATED'); }
+  else if (action === 'show-new-songs') { sfx.move(); setSpotlightMode('new', true); }
+  else if (action === 'show-top-hits') { sfx.move(); setSpotlightMode('top', true); }
   else if (action === 'search') openSearch();
   else if (action === 'library') { sfx.move(); await chooseLibraryFolder(); }
   else if (action === 'visuals') openVisuals();
