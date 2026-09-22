@@ -19,6 +19,8 @@ let settings = { mediaRoot: '', libraryRoot: '', bgvRoot: '', soundBankPath: '' 
 let scanState = { scanning: false, root: '', scanned: 0, songs: 0, visuals: 0 };
 let metadataCache = {};
 let lastMusicBrainzRequestAt = 0;
+let lastItunesRequestAt = 0;
+const artworkDataCache = new Map();
 
 function settingsFile() { return path.join(app.getPath('userData'), 'openkrk-settings.json'); }
 function libraryCacheFile() { return path.join(app.getPath('userData'), 'openkrk-library-index.json'); }
@@ -116,39 +118,32 @@ function buildDiscoveryLookup() {
   return byTitle;
 }
 
+function tokenSimilarity(a = '', b = '') {
+  const left = new Set(cleanDiscoveryText(a).split(' ').filter(Boolean));
+  const right = new Set(cleanDiscoveryText(b).split(' ').filter(Boolean));
+  if (!left.size || !right.size) return 0;
+  let overlap = 0;
+  for (const token of left) if (right.has(token)) overlap += 1;
+  return overlap / Math.max(left.size, right.size);
+}
+
 function matchDiscoveryCandidate(candidate, byTitle) {
   const titleKey = cleanDiscoveryText(candidate.title);
-  if (!titleKey) return null;
-  const direct = byTitle.get(titleKey) || [];
   const artistKey = cleanDiscoveryText(candidate.artist);
-  if (direct.length) {
-    const artistMatch = direct.find(song => {
-      const localArtist = songArtistKey(song);
-      return artistKey && localArtist && (localArtist.includes(artistKey) || artistKey.includes(localArtist));
-    });
-    if (artistMatch) return artistMatch;
-    if (direct.length === 1) return direct[0];
-    const unknown = direct.find(song => !song.artist || song.artist === 'Unknown Artist');
-    if (unknown) return unknown;
-  }
+  if (!titleKey || !artistKey) return null;
 
-  // Conservative fuzzy fallback for common filename variations.
-  const tokens = titleKey.split(' ').filter(token => token.length > 1);
-  if (tokens.length < 2) return null;
+  const direct = byTitle.get(titleKey) || [];
   let best = null;
   let bestScore = 0;
-  for (const song of songIndex) {
-    const localTitle = songTitleKey(song);
-    if (!localTitle) continue;
-    const localTokens = new Set(localTitle.split(' ').filter(token => token.length > 1));
-    const overlap = tokens.filter(token => localTokens.has(token)).length / Math.max(tokens.length, localTokens.size);
-    if (overlap < 0.76) continue;
-    let score = overlap;
+  for (const song of direct) {
     const localArtist = songArtistKey(song);
-    if (artistKey && localArtist && (localArtist.includes(artistKey) || artistKey.includes(localArtist))) score += 0.22;
+    if (!localArtist || localArtist === 'unknown artist') continue;
+    const artistScore = tokenSimilarity(localArtist, artistKey);
+    if (artistScore < 0.72) continue;
+    const score = artistScore + (localArtist === artistKey ? 0.4 : 0);
     if (score > bestScore) { best = song; bestScore = score; }
   }
-  return bestScore >= 0.82 ? best : null;
+  return best;
 }
 
 async function fetchJsonWithTimeout(url, headers = {}, timeoutMs = 9000) {
@@ -166,6 +161,80 @@ async function fetchJsonWithTimeout(url, headers = {}, timeoutMs = 9000) {
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
     return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
+async function itunesJson(url) {
+  const wait = Math.max(0, 3200 - (Date.now() - lastItunesRequestAt));
+  if (wait) await sleep(wait);
+  const json = await fetchJsonWithTimeout(url, {}, 9000);
+  lastItunesRequestAt = Date.now();
+  return json;
+}
+
+function scoreTrackMatch(localTitle, localArtist, item) {
+  const titleScore = tokenSimilarity(localTitle, item.trackName || '');
+  const artistScore = tokenSimilarity(localArtist, item.artistName || '');
+  const exactTitle = cleanDiscoveryText(localTitle) === cleanDiscoveryText(item.trackName || '');
+  const exactArtist = cleanDiscoveryText(localArtist) === cleanDiscoveryText(item.artistName || '');
+  if (titleScore < 0.84) return 0;
+  if (localArtist && localArtist !== 'Unknown Artist' && artistScore < 0.58) return 0;
+  return (titleScore * 0.68) + (artistScore * 0.27) + (exactTitle ? 0.08 : 0) + (exactArtist ? 0.07 : 0);
+}
+
+async function searchItunesTrack(title, artist) {
+  const storefronts = ['US', 'GB', 'JP', 'KR'];
+  let best = null;
+  let bestScore = 0;
+  for (const country of storefronts) {
+    const url = new URL('https://itunes.apple.com/search');
+    url.searchParams.set('term', [title, artist].filter(Boolean).join(' '));
+    url.searchParams.set('country', country);
+    url.searchParams.set('media', 'music');
+    url.searchParams.set('entity', 'song');
+    url.searchParams.set('limit', '20');
+    const json = await itunesJson(url);
+    for (const item of json?.results || []) {
+      const score = scoreTrackMatch(title, artist, item);
+      if (score > bestScore) {
+        best = item;
+        bestScore = score;
+      }
+    }
+    if (bestScore >= 1.02) break;
+  }
+  return bestScore >= 0.82 ? best : null;
+}
+
+async function artworkToDataUrl(url) {
+  const target = String(url || '');
+  if (!target || !/^https:\/\//i.test(target)) return '';
+  if (artworkDataCache.has(target)) return artworkDataCache.get(target);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const response = await fetch(target, {
+      headers: { 'User-Agent': 'OpenKRK/0.4 (https://github.com/kesharrpm/OpenKRK)' },
+      redirect: 'follow',
+      signal: controller.signal
+    });
+    if (!response.ok) return '';
+    const type = response.headers.get('content-type') || 'image/jpeg';
+    if (!type.startsWith('image/')) return '';
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > 5 * 1024 * 1024) return '';
+    const data = 'data:' + type + ';base64,' + buffer.toString('base64');
+    artworkDataCache.set(target, data);
+    if (artworkDataCache.size > 120) {
+      const first = artworkDataCache.keys().next().value;
+      artworkDataCache.delete(first);
+    }
+    return data;
+  } catch {
+    return '';
   } finally {
     clearTimeout(timer);
   }
@@ -261,7 +330,7 @@ function discoverySortValue(item) {
 }
 
 async function discoverCurrentLibrarySongs(limit = 10, force = false) {
-  const max = Math.max(1, Math.min(Number(limit) || 10, 30));
+  const max = Math.max(1, Math.min(Number(limit) || 36, 80));
   const cached = readJson(discoveryCacheFile(), null);
   const cacheAge = cached?.fetchedAt ? Date.now() - Number(cached.fetchedAt) : Infinity;
   if (!force && cached?.items?.length && cacheAge < 6 * 60 * 60 * 1000) {
@@ -287,7 +356,10 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
   const byTitle = buildDiscoveryLookup();
   const matched = [];
   const usedCodes = new Set();
+  const recentCutoff = Date.now() - (540 * 24 * 60 * 60 * 1000);
   for (const candidate of candidates) {
+    const candidateDate = Date.parse(candidate.releaseDate || '') || 0;
+    if (candidate.sourceKind === 'chart' && candidateDate && candidateDate < recentCutoff) continue;
     const song = matchDiscoveryCandidate(candidate, byTitle);
     if (!song || usedCodes.has(String(song.code))) continue;
     usedCodes.add(String(song.code));
@@ -337,60 +409,102 @@ async function resolveSongMetadata(song) {
   const cleanTitle = cleanTransportSuffix(song.title);
   const cleanArtist = cleanTransportSuffix(song.artist || '');
   const cacheKey = normalize(cleanTitle + '|' + cleanArtist);
-  if (metadataCache[cacheKey]) return metadataCache[cacheKey];
+  const cached = metadataCache[cacheKey];
+  if (cached && Number(cached.cachedAt || 0) > Date.now() - (30 * 24 * 60 * 60 * 1000)) return cached;
 
-  const queryParts = ['recording:"' + escapeMbQuery(cleanTitle) + '"'];
-  if (cleanArtist && cleanArtist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(cleanArtist) + '"');
-  const searchUrl = new URL('https://musicbrainz.org/ws/2/recording/');
-  searchUrl.searchParams.set('query', queryParts.join(' AND '));
-  searchUrl.searchParams.set('fmt', 'json');
-  searchUrl.searchParams.set('limit', '5');
+  let metadata = null;
 
-  const search = await musicBrainzJson(searchUrl);
-  const recording = (search.recordings || [])[0];
-  if (!recording) {
-    const empty = { source: 'MusicBrainz', matched: false, title: cleanTitle || song.title, artist: cleanArtist || song.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] };
-    metadataCache[cacheKey] = empty;
-    writeJson(metadataCacheFile(), metadataCache);
-    return empty;
+  try {
+    const item = await searchItunesTrack(cleanTitle, cleanArtist);
+    if (item) {
+      metadata = {
+        source: 'iTunes Search',
+        matched: true,
+        title: item.trackName || cleanTitle,
+        artist: item.artistName || cleanArtist,
+        album: item.collectionName || '',
+        releaseDate: item.releaseDate || '',
+        genre: item.primaryGenreName || '',
+        durationMs: Number(item.trackTimeMillis) || 0,
+        artworkUrl: item.artworkUrl100 || '',
+        storeUrl: item.trackViewUrl || '',
+        cachedAt: Date.now()
+      };
+    }
+  } catch (error) {
+    console.warn('[OpenKRK] iTunes metadata lookup failed:', error.message);
   }
 
-  const detailUrl = new URL('https://musicbrainz.org/ws/2/recording/' + recording.id);
-  detailUrl.searchParams.set('inc', 'artist-credits+releases+work-rels');
-  detailUrl.searchParams.set('fmt', 'json');
-  let detail = recording;
-  try { detail = await musicBrainzJson(detailUrl); } catch {}
+  if (!metadata) {
+    const queryParts = ['recording:"' + escapeMbQuery(cleanTitle) + '"'];
+    if (cleanArtist && cleanArtist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(cleanArtist) + '"');
+    const searchUrl = new URL('https://musicbrainz.org/ws/2/recording/');
+    searchUrl.searchParams.set('query', queryParts.join(' AND '));
+    searchUrl.searchParams.set('fmt', 'json');
+    searchUrl.searchParams.set('limit', '10');
 
-  const artist = (detail['artist-credit'] || recording['artist-credit'] || []).map(item => item.name || item.artist?.name).filter(Boolean).join('');
-  const releases = detail.releases || recording.releases || [];
-  const release = releases.find(item => item.date) || releases[0] || null;
-  const workRelation = (detail.relations || []).find(rel => rel.work?.id);
-  const composers = [];
-
-  if (workRelation?.work?.id) {
     try {
-      const workUrl = new URL('https://musicbrainz.org/ws/2/work/' + workRelation.work.id);
-      workUrl.searchParams.set('inc', 'artist-rels');
-      workUrl.searchParams.set('fmt', 'json');
-      const work = await musicBrainzJson(workUrl);
-      for (const rel of work.relations || []) {
-        if (!rel.artist?.name) continue;
-        if (['writer', 'composer', 'lyricist'].includes(String(rel.type || '').toLowerCase())) composers.push({ name: rel.artist.name, role: rel.type });
+      const search = await musicBrainzJson(searchUrl);
+      const recordings = search.recordings || [];
+      let recording = null;
+      let bestScore = 0;
+      for (const candidate of recordings) {
+        const candidateArtist = (candidate['artist-credit'] || []).map(item => item.name || item.artist?.name).filter(Boolean).join(' ');
+        const titleScore = tokenSimilarity(cleanTitle, candidate.title || '');
+        const artistScore = tokenSimilarity(cleanArtist, candidateArtist);
+        if (titleScore < 0.84 || (cleanArtist && cleanArtist !== 'Unknown Artist' && artistScore < 0.58)) continue;
+        const score = titleScore * 0.7 + artistScore * 0.3;
+        if (score > bestScore) { recording = candidate; bestScore = score; }
       }
-    } catch {}
+
+      if (recording) {
+        const detailUrl = new URL('https://musicbrainz.org/ws/2/recording/' + recording.id);
+        detailUrl.searchParams.set('inc', 'artist-credits+releases+release-groups');
+        detailUrl.searchParams.set('fmt', 'json');
+        let detail = recording;
+        try { detail = await musicBrainzJson(detailUrl); } catch {}
+
+        const artist = (detail['artist-credit'] || recording['artist-credit'] || []).map(item => item.name || item.artist?.name).filter(Boolean).join('');
+        const releases = detail.releases || recording.releases || [];
+        const release = releases.find(item => item.date) || releases[0] || null;
+        const releaseGroupId = release?.['release-group']?.id || detail.releases?.[0]?.['release-group']?.id || '';
+        metadata = {
+          source: 'MusicBrainz',
+          matched: true,
+          title: detail.title || recording.title || cleanTitle,
+          artist: artist || cleanArtist,
+          album: release?.title || '',
+          releaseDate: release?.date || detail['first-release-date'] || recording['first-release-date'] || '',
+          genre: '',
+          durationMs: Number(detail.length || recording.length) || 0,
+          artworkUrl: releaseGroupId
+            ? 'https://coverartarchive.org/release-group/' + releaseGroupId + '/front-500'
+            : (release?.id ? 'https://coverartarchive.org/release/' + release.id + '/front-500' : ''),
+          storeUrl: '',
+          cachedAt: Date.now()
+        };
+      }
+    } catch (error) {
+      console.warn('[OpenKRK] MusicBrainz metadata lookup failed:', error.message);
+    }
   }
 
-  const metadata = {
-    source: 'MusicBrainz',
-    matched: true,
-    mbid: detail.id || recording.id,
-    title: detail.title || recording.title || cleanTitle || song.title,
-    artist: artist || cleanArtist || song.artist || '',
-    album: release?.title || '',
-    releaseDate: release?.date || detail['first-release-date'] || recording['first-release-date'] || '',
-    coverArtUrl: release?.id ? 'https://coverartarchive.org/release/' + release.id + '/front-500' : '',
-    composers: composers.slice(0, 6)
-  };
+  if (!metadata) {
+    metadata = {
+      source: '',
+      matched: false,
+      title: cleanTitle || song.title,
+      artist: cleanArtist || song.artist || '',
+      album: '',
+      releaseDate: '',
+      genre: '',
+      durationMs: 0,
+      artworkUrl: '',
+      storeUrl: '',
+      cachedAt: Date.now()
+    };
+  }
+
   metadataCache[cacheKey] = metadata;
   writeJson(metadataCacheFile(), metadataCache);
   return metadata;
@@ -684,8 +798,9 @@ ipcMain.handle('soundbank:choose', async () => {
 ipcMain.handle('soundbank:status', () => ({ path: settings.soundBankPath || '', name: settings.soundBankPath ? path.basename(settings.soundBankPath) : '' }));
 ipcMain.handle('metadata:resolve', async (_event, song) => {
   try { return await resolveSongMetadata(song); }
-  catch (error) { return { source: 'MusicBrainz', matched: false, error: error.message || String(error), title: song?.title || '', artist: song?.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] }; }
+  catch (error) { return { source: '', matched: false, error: error.message || String(error), title: cleanTransportSuffix(song?.title || ''), artist: cleanTransportSuffix(song?.artist || ''), album: '', releaseDate: '', genre: '', durationMs: 0, artworkUrl: '', storeUrl: '' }; }
 });
+ipcMain.handle('metadata:artwork-data', async (_event, url) => artworkToDataUrl(url));
 
 ipcMain.handle('font:choose', async () => {
   const result = await dialog.showOpenDialog({
