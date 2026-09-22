@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('openkrk', {
   chooseSoundBank: () => ipcRenderer.invoke('soundbank:choose'),
   getSoundBankStatus: () => ipcRenderer.invoke('soundbank:status'),
   resolveSongMetadata: song => ipcRenderer.invoke('metadata:resolve', song),
+  getArtworkData: url => ipcRenderer.invoke('metadata:artwork-data', url),
   chooseFontFile: () => ipcRenderer.invoke('font:choose'),
   readBinaryFile: filePath => ipcRenderer.invoke('file:read-binary', filePath),
   onLibraryProgress: callback => {
