@@ -102,46 +102,38 @@
     </section>
 
     <header class="machine-head">
-      <div class="brand" aria-label="OpenKRK">
-        <svg class="brand-symbol" viewBox="0 0 44 28" aria-hidden="true">
-          <path d="M2 5h12l8 7 8-7h12v6H32l-6 5 6 5h10v6H30l-8-7-8 7H2v-6h10l6-5-6-5H2z"/>
-        </svg>
-        <div class="brand-type"><b>OPENKRK</b><span>ROOM SYSTEM</span></div>
+      <div class="classic-current">
+        <span class="current-label">현재곡</span>
+        <span class="current-note">♪</span>
+        <strong id="idleCurrentCode">00000</strong>
+        <span id="idleCurrentTitle">OPENKRK ROOM</span>
       </div>
-      <div class="head-status">
-        <span id="libraryStatus">NO LIBRARY</span><i></i>
-        <span id="bgvStatus">BGV OFF</span><i></i>
+      <div class="classic-status">
+        <span id="libraryStatus">NO LIBRARY</span>
+        <span id="bgvStatus">BGV OFF</span>
         <span id="audioStatus">NO SOUNDBANK</span>
       </div>
     </header>
 
     <section id="idleSurface" class="idle-surface">
       <div id="numberConsole" class="number-console top-entry">
-        <div class="number-meta"><span>현재곡 / SONG NUMBER</span><span id="entryMode">DIRECT ENTRY</span></div>
+        <span class="number-caption">SONG NO.</span>
         <div id="codeDisplay" class="code-display">— — — — —</div>
-        <div class="number-help">TYPE NUMBER · ENTER PLAY · F1 SEARCH</div>
+        <span id="entryMode" class="entry-mode">ENTER TO PLAY</span>
       </div>
 
       <section id="newSongsDeck" class="new-songs-deck" aria-label="New songs">
-        <div class="new-songs-banner" aria-hidden="true">
-          <svg viewBox="0 0 760 118" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="ns0" x1="0" x2="1">
-                <stop offset="0" stop-color="#35dce0"/><stop offset=".38" stop-color="#096f90"/><stop offset="1" stop-color="#ff547d"/>
-              </linearGradient>
-            </defs>
-            <rect width="760" height="118" rx="10" fill="url(#ns0)"/>
-            <path d="M0 88 C148 35 244 28 386 82 C493 122 616 111 760 56 V118 H0Z" fill="#04131b" opacity=".44"/>
-            <g fill="#fff" opacity=".18"><circle cx="620" cy="16" r="72"/><circle cx="702" cy="100" r="98"/></g>
-          </svg>
+        <div class="new-songs-banner">
+          <div class="new-ribbon-mark">NEW</div>
           <div class="new-songs-title">
-            <small>OPENKRK UPDATE CHANNEL</small>
+            <small>신곡 안내 · OPENKRK</small>
             <strong>NEW SONGS</strong>
-            <span>LOCAL DISCOVERY</span>
+            <span id="newSongsSource">CHECKING ONLINE CATALOG…</span>
           </div>
+          <button class="new-refresh" data-action="refresh-new-songs">↻ UPDATE</button>
         </div>
         <div class="new-songs-head">
-          <span>#</span><span>SONG</span><span>ARTIST</span><span>ADDED</span>
+          <span>NO.</span><span>TITLE</span><span>ARTIST</span><span>RELEASE</span>
         </div>
         <div id="newSongsList" class="new-songs-list">
           <div class="new-song-empty">Waiting for local song index…</div>
@@ -164,10 +156,10 @@
       </div>
 
       <div class="library-ticker">
-        <span class="ticker-index">SMART</span>
+        <span class="ticker-index">INFO</span>
         <div class="ticker-copy">
-          <strong id="tickerPrimary">OpenKRK is reading your local karaoke library.</strong>
-          <span id="tickerSecondary">New songs are detected from first-seen time and file modification time.</span>
+          <strong id="tickerPrimary">Checking online music catalogs for songs you actually have.</strong>
+          <span id="tickerSecondary">Only API matches that exist in your MIDI folder appear in NEW SONGS.</span>
         </div>
       </div>
     </section>
