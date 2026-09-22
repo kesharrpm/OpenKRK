@@ -137,8 +137,10 @@ function installCustomFont(slot, filePath) {
   return `"${family}", sans-serif`;
 }
 function applyPrefs() {
-  document.documentElement.style.setProperty('--ui-scale', String((Number(prefs.uiScale) || 100) / 100));
-  document.documentElement.style.setProperty('--lyric-scale', String((Number(prefs.lyricScale) || 100) / 100));
+  prefs.uiScale = Math.max(80, Math.min(125, Number(prefs.uiScale) || 100));
+  prefs.lyricScale = Math.max(75, Math.min(135, Number(prefs.lyricScale) || 100));
+  document.documentElement.style.setProperty('--ui-scale', String(prefs.uiScale / 100));
+  document.documentElement.style.setProperty('--lyric-scale', String(prefs.lyricScale / 100));
   const requestedTheme = prefs.themeMode || 'dark';
   const resolvedTheme = requestedTheme === 'auto'
     ? (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
@@ -974,12 +976,15 @@ function revealSongIntro(song) {
   clearTimeout(songIntroTimer);
   renderMetadataCard(song, null);
   songIntroCard.classList.remove('hidden');
-  songIntroTimer = setTimeout(() => songIntroCard.classList.add('hidden'), 4600);
+  songIntroTimer = setTimeout(() => songIntroCard.classList.add('hidden'), 6200);
+}
 
+function enrichSongIntro(song, durationSeconds = 0) {
   window.openkrk?.resolveSongMetadata?.({
     code: song.code,
     title: song.title,
-    artist: song.artist
+    artist: song.artist,
+    durationMs: Math.round(Math.max(0, Number(durationSeconds) || 0) * 1000)
   }).then(metadata => {
     if (currentSong !== song) return;
     renderMetadataCard(song, metadata);
@@ -995,7 +1000,7 @@ function renderSearchMessage(message) {
 }
 function openSearch() {
   setMode('search');
-  renderSearchMessage(libraryCount ? 'Start typing to search your local library.' : 'Close search and press F2 to choose your media folder.');
+  renderSearchMessage(libraryCount ? 'Start typing to search your songs.' : 'Open System and choose a songs folder first.');
   searchMeta.textContent = libraryCount ? `${formatCount(libraryCount)} SONGS INDEXED` : 'NO LIBRARY INDEXED';
   sfx.move();
 }
@@ -1005,7 +1010,7 @@ function closePanel() { sfx.back(); returnToRoom(); }
 function renderSearchResults(rows, query) {
   searchResults.replaceChildren();
   searchMeta.textContent = `${rows.length} RESULT${rows.length === 1 ? '' : 'S'} · ${formatCount(libraryCount)} SONGS INDEXED`;
-  if (!rows.length) { renderSearchMessage(`No local songs matched “${query}”.`); return; }
+  if (!rows.length) { renderSearchMessage(`No songs matched “${query}”.`); return; }
   for (const song of rows) {
     const row = document.createElement('div'); row.className = 'search-row'; row.tabIndex = 0;
     const code = document.createElement('span'); code.className = 'search-row-code'; code.textContent = song.code || '—'; if (song.generatedCode) code.dataset.local = 'true';
@@ -1022,7 +1027,7 @@ function renderSearchResults(rows, query) {
 }
 async function performSearch(query) {
   const trimmed = query.trim();
-  if (!trimmed) { renderSearchMessage(libraryCount ? 'Start typing to search your local library.' : 'No library indexed yet.'); return; }
+  if (!trimmed) { renderSearchMessage(libraryCount ? 'Start typing to search your songs.' : 'No song library yet.'); return; }
   const rows = await window.openkrk?.searchSongs?.(trimmed, 80) || [];
   if (searchInput.value.trim() !== trimmed) return;
   renderSearchResults(rows, trimmed);
@@ -1103,6 +1108,7 @@ async function playResolvedSong(song) {
     setMode('player');
     revealSongIntro(song);
     const binary = await midiEngine.playSong(song);
+    enrichSongIntro(song, midiEngine.state().duration);
     currentLyrics = parseMidiLyrics(binary);
     currentLyricLine = -1;
     $('lyricCurrent').textContent = '♪';
