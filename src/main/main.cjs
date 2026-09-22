@@ -355,7 +355,7 @@ function visualCatalog() {
 }
 
 ipcMain.handle('library:choose-folder', async event => {
-  const result = await dialog.showOpenDialog({ title: 'Choose your OpenKRK media folder (MIDI / KAR + BGV videos)', properties: ['openDirectory'] });
+  const result = await dialog.showOpenDialog({ title: 'Choose your OpenKRK songs folder (MID / MIDI / KAR)', properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
   return scanLibrary(result.filePaths[0], event.sender);
 });
