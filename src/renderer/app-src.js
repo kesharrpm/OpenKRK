@@ -36,6 +36,9 @@ const introCountdown = $('introCountdown');
 const introVisualName = $('introVisualName');
 const newSongsList = $('newSongsList');
 const newSongsSource = $('newSongsSource');
+const spotlightKicker = $('spotlightKicker');
+const spotlightTitle = $('spotlightTitle');
+const numberPreview = $('numberPreview');
 const idleCurrentCode = $('idleCurrentCode');
 const idleCurrentTitle = $('idleCurrentTitle');
 const songIntroCard = $('songIntroCard');
@@ -85,12 +88,17 @@ let startupComplete = false;
 let introTimer = null;
 let songIntroTimer = null;
 let lastLibraryStatus = { root: '', bgvRoot: '', count: 0, visualCount: 0 };
-let latestPool = [];
-let latestOrder = [];
-let latestCursor = 0;
+let spotlightPools = { new: [], top: [] };
+let spotlightOrders = { new: [], top: [] };
+let spotlightCursors = { new: 0, top: 0 };
+let spotlightMode = 'new';
 let latestRotateTimer = null;
 let artworkRequestToken = 0;
 let activeLyricDelayMs = Number(prefs.lyricDelayMs) || 0;
+let liveLyricCorrectionSec = 0;
+let liveLyricSamples = [];
+let codePreviewTimer = null;
+let codePreviewSerial = 0;
 
 function loadPrefs() {
   try {
@@ -243,6 +251,7 @@ class MidiEngine {
     this.loadedBankPath = '';
     this.pendingReady = null;
     this.pendingReject = null;
+    this.onTextEvent = null;
   }
   async ensureCore() {
     if (this.context && this.synth && this.sequencer) {
@@ -271,6 +280,9 @@ class MidiEngine {
         this.pendingReject = null;
         reject(error instanceof Error ? error : new Error(String(error?.message || error || 'MIDI parse error')));
       }
+    });
+    this.sequencer.eventHandler.addEvent('textEvent', 'openkrk-lyric-clock', payload => {
+      try { this.onTextEvent?.(payload); } catch (error) { console.warn('[OpenKRK] text event:', error); }
     });
     await this.context.resume();
   }
@@ -554,7 +566,7 @@ function parseMidiLyrics(arrayBuffer) {
       segments = [];
     };
 
-    const addSegment = (text, time) => {
+    const addSegment = (text, time, tick) => {
       const normalized = String(text || '').replace(/\^/g, ' ').replace(/\s+/g, ' ');
       if (!normalized.trim()) return;
       if (segments.length) {
@@ -564,13 +576,13 @@ function parseMidiLyrics(arrayBuffer) {
         const punctuated = /[.!?…,:;]$/.test(currentText);
         if (gap > 1.65 || (gap > .82 && punctuated) || (gap > .58 && currentText.length > 48)) pushLine(time);
       }
-      segments.push({ text: normalized, start: time });
+      segments.push({ text: normalized, start: time, tick: Number(tick) || 0 });
     };
 
     for (const event of events) {
       let buffer = '';
       const flush = () => {
-        if (buffer) addSegment(buffer, event.time);
+        if (buffer) addSegment(buffer, event.time, event.tick);
         buffer = '';
       };
       for (const char of event.text.replace(/\r/g, '\n')) {
