@@ -175,17 +175,24 @@ async function itunesJson(url) {
   return json;
 }
 
-function scoreTrackMatch(localTitle, localArtist, item) {
+function scoreTrackMatch(localTitle, localArtist, item, durationMs = 0) {
   const titleScore = tokenSimilarity(localTitle, item.trackName || '');
   const artistScore = tokenSimilarity(localArtist, item.artistName || '');
   const exactTitle = cleanDiscoveryText(localTitle) === cleanDiscoveryText(item.trackName || '');
   const exactArtist = cleanDiscoveryText(localArtist) === cleanDiscoveryText(item.artistName || '');
   if (titleScore < 0.84) return 0;
   if (localArtist && localArtist !== 'Unknown Artist' && artistScore < 0.58) return 0;
-  return (titleScore * 0.68) + (artistScore * 0.27) + (exactTitle ? 0.08 : 0) + (exactArtist ? 0.07 : 0);
+  let durationScore = 0;
+  if (durationMs > 0 && Number(item.trackTimeMillis) > 0) {
+    const ratio = Math.abs(Number(item.trackTimeMillis) - durationMs) / Math.max(durationMs, Number(item.trackTimeMillis));
+    if (ratio <= 0.06) durationScore = 0.10;
+    else if (ratio <= 0.12) durationScore = 0.05;
+    else if (ratio >= 0.25) durationScore = -0.12;
+  }
+  return (titleScore * 0.68) + (artistScore * 0.27) + (exactTitle ? 0.08 : 0) + (exactArtist ? 0.07 : 0) + durationScore;
 }
 
-async function searchItunesTrack(title, artist) {
+async function searchItunesTrack(title, artist, durationMs = 0) {
   const url = new URL('https://itunes.apple.com/search');
   url.searchParams.set('term', [title, artist].filter(Boolean).join(' '));
   url.searchParams.set('country', 'US');
@@ -197,7 +204,7 @@ async function searchItunesTrack(title, artist) {
   let best = null;
   let bestScore = 0;
   for (const item of json?.results || []) {
-    const score = scoreTrackMatch(title, artist, item);
+    const score = scoreTrackMatch(title, artist, item, durationMs);
     if (score > bestScore) { best = item; bestScore = score; }
   }
   return bestScore >= 0.82 ? best : null;
@@ -206,6 +213,11 @@ async function searchItunesTrack(title, artist) {
 async function artworkToDataUrl(url) {
   const target = String(url || '');
   if (!target || !/^https:\/\//i.test(target)) return '';
+  let parsed;
+  try { parsed = new URL(target); } catch { return ''; }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = host.endsWith('.mzstatic.com') || host === 'coverartarchive.org' || host.endsWith('.coverartarchive.org');
+  if (!allowed) return '';
   if (artworkDataCache.has(target)) return artworkDataCache.get(target);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 9000);
@@ -410,7 +422,7 @@ async function resolveSongMetadata(song) {
   let metadata = null;
 
   try {
-    const item = await searchItunesTrack(cleanTitle, cleanArtist);
+    const item = await searchItunesTrack(cleanTitle, cleanArtist, Number(song.durationMs) || 0);
     if (item) {
       metadata = {
         source: 'iTunes Search',
