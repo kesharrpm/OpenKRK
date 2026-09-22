@@ -8,8 +8,8 @@ const SOUND_BANK_EXTENSIONS = new Set(['.sf2', '.sf3', '.sfogg', '.dls']);
 const FONT_EXTENSIONS = new Set(['.ttf', '.otf', '.woff', '.woff2']);
 const MAX_LIBRARY_FILES = 100000;
 const MAX_VISUAL_FILES = 12000;
-const LOCAL_CODE_MIN = 9000000;
-const LOCAL_CODE_RANGE = 1000000;
+const LOCAL_CODE_MIN = 10000;
+const LOCAL_CODE_RANGE = 90000;
 
 let songIndex = [];
 let songByCode = new Map();
@@ -171,18 +171,66 @@ async function fetchJsonWithTimeout(url, headers = {}, timeoutMs = 9000) {
   }
 }
 
-async function fetchApplePhilippinesChart() {
-  const url = 'https://rss.applemarketingtools.com/api/v2/ph/music/most-played/100/songs.json';
-  const json = await fetchJsonWithTimeout(url);
-  return (json?.feed?.results || []).map((item, index) => ({
-    title: item.name || '',
-    artist: item.artistName || '',
-    releaseDate: item.releaseDate || '',
-    artworkUrl: item.artworkUrl100 || '',
-    source: 'Apple Music PH',
-    sourceKind: 'chart',
-    rank: index + 1
+async function fetchAppleGlobalCharts() {
+  const storefronts = [
+    ['us', 'US'], ['gb', 'UK'], ['ca', 'Canada'], ['au', 'Australia'],
+    ['jp', 'Japan'], ['kr', 'Korea'], ['de', 'Germany'], ['fr', 'France'],
+    ['br', 'Brazil'], ['mx', 'Mexico'], ['za', 'South Africa'], ['sg', 'Singapore']
+  ];
+
+  const responses = await Promise.allSettled(storefronts.map(async ([code, label]) => {
+    const url = 'https://rss.applemarketingtools.com/api/v2/' + code + '/music/most-played/50/songs.json';
+    const json = await fetchJsonWithTimeout(url);
+    return (json?.feed?.results || []).map((item, index) => ({
+      title: item.name || '',
+      artist: item.artistName || '',
+      releaseDate: item.releaseDate || '',
+      artworkUrl: item.artworkUrl100 || '',
+      market: label,
+      rank: index + 1
+    }));
   }));
+
+  const merged = new Map();
+  for (const response of responses) {
+    if (response.status !== 'fulfilled') continue;
+    for (const item of response.value) {
+      const key = cleanDiscoveryText(item.title) + '|' + cleanDiscoveryText(item.artist);
+      if (!key || key === '|') continue;
+      const score = Math.max(1, 51 - item.rank);
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, {
+          ...item,
+          markets: [item.market],
+          globalScore: score
+        });
+      } else {
+        existing.globalScore += score;
+        if (!existing.markets.includes(item.market)) existing.markets.push(item.market);
+        if (item.rank < existing.rank) {
+          existing.rank = item.rank;
+          existing.artworkUrl = item.artworkUrl || existing.artworkUrl;
+          existing.releaseDate = item.releaseDate || existing.releaseDate;
+        }
+      }
+    }
+  }
+
+  return [...merged.values()]
+    .sort((a, b) => (b.globalScore - a.globalScore) || (a.rank - b.rank))
+    .slice(0, 250)
+    .map(item => ({
+      title: item.title,
+      artist: item.artist,
+      releaseDate: item.releaseDate,
+      artworkUrl: item.artworkUrl,
+      source: 'Apple Music Global',
+      sourceKind: 'chart',
+      rank: item.rank,
+      globalScore: item.globalScore,
+      markets: item.markets
+    }));
 }
 
 async function fetchMusicBrainzRecentReleases() {
@@ -228,7 +276,7 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
   const candidates = [];
   const errors = [];
   const results = await Promise.allSettled([
-    fetchApplePhilippinesChart(),
+    fetchAppleGlobalCharts(),
     fetchMusicBrainzRecentReleases()
   ]);
   for (const result of results) {
@@ -252,7 +300,9 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
         artworkUrl: candidate.artworkUrl,
         source: candidate.source,
         sourceKind: candidate.sourceKind,
-        rank: candidate.rank
+        rank: candidate.rank,
+        globalScore: candidate.globalScore || 0,
+        markets: candidate.markets || []
       }
     });
   }
@@ -263,7 +313,7 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
     fetchedAt: Date.now(),
     source: results.some(result => result.status === 'fulfilled') ? 'ONLINE' : 'OFFLINE',
     sources: [
-      ...(results[0]?.status === 'fulfilled' ? ['Apple Music PH'] : []),
+      ...(results[0]?.status === 'fulfilled' ? ['Apple Music Global'] : []),
       ...(results[1]?.status === 'fulfilled' ? ['MusicBrainz Recent'] : [])
     ],
     candidateCount: candidates.length,
@@ -377,17 +427,36 @@ function hashPath(value) {
 
 function assignLocalCodes(songs, previousSongs = []) {
   const previousByPath = new Map();
-  for (const previous of previousSongs) {
-    if (previous?.path && previous?.generatedCode && previous?.code) previousByPath.set(canonicalPath(previous.path), String(previous.code));
-  }
-  const used = new Set();
-  for (const song of songs) if (song.code) used.add(String(song.code));
-  const uncoded = songs.filter(song => !song.code).sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }));
+  const validDisplayCode = value => /^\d{4,5}$/.test(String(value || ''));
 
-  for (const song of uncoded) {
+  for (const previous of previousSongs) {
+    if (previous?.path && previous?.generatedCode && validDisplayCode(previous?.code)) {
+      previousByPath.set(canonicalPath(previous.path), String(previous.code));
+    }
+  }
+
+  const used = new Set();
+  for (const song of songs) {
+    const original = String(song.sourceCode || song.code || '').trim();
+    song.sourceCode = original;
+
+    if (song.generatedCode || !validDisplayCode(song.code)) {
+      song.code = '';
+      song.generatedCode = true;
+    } else {
+      song.code = String(song.code);
+      song.generatedCode = false;
+      used.add(song.code);
+    }
+  }
+
+  const needsLocalCode = songs.filter(song => !song.code)
+    .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }));
+
+  for (const song of needsLocalCode) {
     const lookupKey = canonicalPath(song.path);
     let code = previousByPath.get(lookupKey) || '';
-    if (!code || used.has(code)) {
+    if (!validDisplayCode(code) || used.has(code)) {
       let candidate = LOCAL_CODE_MIN + (hashPath(lookupKey) % LOCAL_CODE_RANGE);
       let attempts = 0;
       while (used.has(String(candidate)) && attempts < LOCAL_CODE_RANGE) {
@@ -397,18 +466,12 @@ function assignLocalCodes(songs, previousSongs = []) {
       code = String(candidate);
     }
     song.code = code;
-    song.sourceCode = '';
     song.generatedCode = true;
-    song.key = normalize(`${code} ${song.title} ${song.artist}`);
     used.add(code);
   }
 
   for (const song of songs) {
-    if (!song.generatedCode) {
-      song.sourceCode = song.sourceCode || song.code || '';
-      song.generatedCode = false;
-      song.key = normalize(`${song.code} ${song.title} ${song.artist}`);
-    }
+    song.key = normalize(`${song.code} ${song.sourceCode || ''} ${song.title} ${song.artist}`);
   }
   return songs;
 }
