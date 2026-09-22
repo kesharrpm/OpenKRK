@@ -63,7 +63,8 @@ const DEFAULT_PREFS = {
   romanizedEnabled: true,
   lyricDelayMs: 0,
   uiThemeVersion: 3,
-  themeMode: 'dark'
+  themeMode: 'dark',
+  lyricOffsets: {}
 };
 
 let prefs = loadPrefs();
@@ -89,6 +90,7 @@ let latestOrder = [];
 let latestCursor = 0;
 let latestRotateTimer = null;
 let artworkRequestToken = 0;
+let activeLyricDelayMs = Number(prefs.lyricDelayMs) || 0;
 
 function loadPrefs() {
   try {
@@ -113,17 +115,39 @@ function formatLyricDelay(value) {
   const seconds = ms / 1000;
   return (seconds >= 0 ? '+' : '') + seconds.toFixed(2) + 's';
 }
-function setLyricDelay(value, announce = false) {
-  prefs.lyricDelayMs = Math.max(-5000, Math.min(5000, Math.round(Number(value) || 0)));
-  savePrefs();
-  if ($('lyricDelay')) $('lyricDelay').value = prefs.lyricDelayMs;
-  if ($('lyricDelayValue')) $('lyricDelayValue').textContent = formatLyricDelay(prefs.lyricDelayMs);
-  if ($('lyricDelayHud')) {
-    $('lyricDelayHud').textContent = 'SYNC ' + formatLyricDelay(prefs.lyricDelayMs);
-    $('lyricDelayHud').classList.toggle('active', Math.abs(prefs.lyricDelayMs) >= 25);
-  }
-  if (announce) showToast('LYRIC DELAY · ' + formatLyricDelay(prefs.lyricDelayMs));
+function songSyncKey(song) {
+  return String(song?.path || song?.code || ((song?.title || '') + '|' + (song?.artist || '')));
 }
+function loadSongLyricDelay(song) {
+  const offsets = prefs.lyricOffsets && typeof prefs.lyricOffsets === 'object' ? prefs.lyricOffsets : {};
+  activeLyricDelayMs = Number(offsets[songSyncKey(song)]) || 0;
+  if ($('lyricDelay')) $('lyricDelay').value = activeLyricDelayMs;
+  if ($('lyricDelayValue')) $('lyricDelayValue').textContent = formatLyricDelay(activeLyricDelayMs);
+  if ($('lyricDelayHud')) {
+    $('lyricDelayHud').textContent = 'SYNC ' + formatLyricDelay(activeLyricDelayMs);
+    $('lyricDelayHud').classList.toggle('active', Math.abs(activeLyricDelayMs) >= 25);
+  }
+}
+function setLyricDelay(value, announce = false) {
+  activeLyricDelayMs = Math.max(-5000, Math.min(5000, Math.round(Number(value) || 0)));
+  if (currentSong) {
+    if (!prefs.lyricOffsets || typeof prefs.lyricOffsets !== 'object') prefs.lyricOffsets = {};
+    const key = songSyncKey(currentSong);
+    if (Math.abs(activeLyricDelayMs) < 25) delete prefs.lyricOffsets[key];
+    else prefs.lyricOffsets[key] = activeLyricDelayMs;
+  } else {
+    prefs.lyricDelayMs = activeLyricDelayMs;
+  }
+  savePrefs();
+  if ($('lyricDelay')) $('lyricDelay').value = activeLyricDelayMs;
+  if ($('lyricDelayValue')) $('lyricDelayValue').textContent = formatLyricDelay(activeLyricDelayMs);
+  if ($('lyricDelayHud')) {
+    $('lyricDelayHud').textContent = 'SYNC ' + formatLyricDelay(activeLyricDelayMs);
+    $('lyricDelayHud').classList.toggle('active', Math.abs(activeLyricDelayMs) >= 25);
+  }
+  if (announce) showToast('LYRIC SYNC · ' + formatLyricDelay(activeLyricDelayMs));
+}
+
 function localFileUrl(filePath) {
   const normalized = String(filePath || '').replace(/\\/g, '/');
   return encodeURI(normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`);
@@ -162,8 +186,8 @@ function applyPrefs() {
   $('romanizedEnabled').value = prefs.romanizedEnabled ? 'on' : 'off';
   $('sfxVolume').value = prefs.sfxVolume;
   $('sfxVolumeValue').textContent = `${prefs.sfxVolume}%`;
-  $('lyricDelay').value = Number(prefs.lyricDelayMs) || 0;
-  $('lyricDelayValue').textContent = formatLyricDelay(prefs.lyricDelayMs);
+  $('lyricDelay').value = activeLyricDelayMs;
+  $('lyricDelayValue').textContent = formatLyricDelay(activeLyricDelayMs);
 }
 
 class InterfaceSfx {
@@ -1089,7 +1113,7 @@ function startTransportLoop() {
       $('remaining').textContent = `-${formatTime(Math.max(0, state.duration - state.currentTime))}`;
       $('progressFill').style.width = `${state.duration > 0 ? Math.min(100, (state.currentTime / state.duration) * 100) : 0}%`;
       $('playState').textContent = state.paused ? 'PAUSE' : 'PLAY';
-      const lyricTime = Math.max(0, state.currentTime - ((Number(prefs.lyricDelayMs) || 0) / 1000));
+      const lyricTime = Math.max(0, state.currentTime - (activeLyricDelayMs / 1000));
       updateLyrics(lyricTime);
       if (state.finished && state.duration > 0) { stopCurrentSong(false); return; }
     }
@@ -1102,6 +1126,7 @@ async function playResolvedSong(song) {
   if (!midiEngine.soundBankPath) { openSystem(); showToast('Choose a SoundFont / DLS in F4 before playing MIDI'); sfx.error(); return; }
   try {
     currentSong = song;
+    loadSongLyricDelay(song);
     const displayTitle = cleanSongTitle(song.title || 'Untitled');
     $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = displayTitle; $('nowArtist').textContent = song.artist || 'Unknown Artist'; idleCurrentCode.textContent = song.code || '—'; idleCurrentTitle.textContent = displayTitle + ' · ' + (song.artist || 'Unknown Artist');
     $('lyricCurrent').textContent = 'LOADING MIDI…'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
@@ -1121,7 +1146,7 @@ async function playResolvedSong(song) {
   }
 }
 function stopCurrentSong(withSfx = true) {
-  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; cancelAnimationFrame(transportRaf); clearTimeout(songIntroTimer); songIntroCard.classList.remove('hidden');
+  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; activeLyricDelayMs = Number(prefs.lyricDelayMs) || 0; cancelAnimationFrame(transportRaf); clearTimeout(songIntroTimer); songIntroCard.classList.remove('hidden'); setLyricDelay(activeLyricDelayMs, false);
   $('progressFill').style.width = '0%'; $('elapsed').textContent = '0:00'; $('remaining').textContent = '-0:00'; setMode('idle'); if (withSfx) sfx.back();
 }
 async function reserveCode(immediate = false) {
@@ -1220,8 +1245,8 @@ document.addEventListener('keydown', async event => {
   if (event.key === 'Backspace') { event.preventDefault(); codeBuffer = codeBuffer.slice(0, -1); renderCode(); sfx.move(); return; }
   if (event.key === 'Escape') { event.preventDefault(); if (currentSong) stopCurrentSong(); else { clearCode(); sfx.back(); } return; }
   if (event.key === ' ') { if (currentSong) { event.preventDefault(); const paused = midiEngine.togglePause(); showToast(paused ? 'PAUSED' : 'RESUMED'); sfx.move(); } return; }
-  if (currentSong && event.key === '[') { event.preventDefault(); setLyricDelay((Number(prefs.lyricDelayMs) || 0) - 100, true); return; }
-  if (currentSong && event.key === ']') { event.preventDefault(); setLyricDelay((Number(prefs.lyricDelayMs) || 0) + 100, true); return; }
+  if (currentSong && event.key === '[') { event.preventDefault(); setLyricDelay(activeLyricDelayMs - 100, true); return; }
+  if (currentSong && event.key === ']') { event.preventDefault(); setLyricDelay(activeLyricDelayMs + 100, true); return; }
   if (currentSong && event.key === '\\') { event.preventDefault(); setLyricDelay(0, true); return; }
   if (event.key === 'Enter') { event.preventDefault(); await reserveCode(true); return; }
   if (event.key === 'F1') { event.preventDefault(); openSearch(); return; }
@@ -1235,7 +1260,7 @@ window.matchMedia?.('(prefers-color-scheme: light)').addEventListener?.('change'
   if (prefs.themeMode === 'auto') applyPrefs();
 });
 applyPrefs();
-setLyricDelay(prefs.lyricDelayMs, false);
+setLyricDelay(activeLyricDelayMs, false);
 renderCode();
 bootstrapRoom().catch(error => {
   console.error(error);
