@@ -61,7 +61,8 @@ const DEFAULT_PREFS = {
   sfxEnabled: true,
   sfxVolume: 45,
   romanizedEnabled: true,
-  lyricDelayMs: 0
+  lyricDelayMs: 0,
+  uiThemeVersion: 2
 };
 
 let prefs = loadPrefs();
@@ -84,8 +85,17 @@ let songIntroTimer = null;
 let lastLibraryStatus = { root: '', bgvRoot: '', count: 0, visualCount: 0 };
 
 function loadPrefs() {
-  try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('openkrk-ui-prefs') || '{}') }; }
-  catch { return { ...DEFAULT_PREFS }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem('openkrk-ui-prefs') || '{}');
+    const merged = { ...DEFAULT_PREFS, ...saved };
+    if (!saved.uiThemeVersion || Number(saved.uiThemeVersion) < 2) {
+      if (!saved.systemFont || saved.systemFont === 'condensed') merged.systemFont = 'system';
+      if (!saved.lyricFont || saved.lyricFont === 'condensed' || saved.lyricFont === 'rounded') merged.lyricFont = 'karaoke';
+      merged.uiThemeVersion = 2;
+      localStorage.setItem('openkrk-ui-prefs', JSON.stringify(merged));
+    }
+    return merged;
+  } catch { return { ...DEFAULT_PREFS, uiThemeVersion: 2 }; }
 }
 function savePrefs() { localStorage.setItem('openkrk-ui-prefs', JSON.stringify(prefs)); }
 function cleanSongTitle(value = '') {
@@ -840,7 +850,15 @@ function updateLyrics(time) {
   if (index < 0) {
     index = currentLyrics.findLastIndex ? currentLyrics.findLastIndex(line => line.start <= time) : (() => { let found = -1; for (let i = 0; i < currentLyrics.length; i += 1) if (currentLyrics[i].start <= time) found = i; return found; })();
   }
-  if (index >= 0) renderLyricLine(index, time);
+  if (index >= 0) {
+    renderLyricLine(index, time);
+  } else {
+    $('lyricPrev').textContent = '';
+    $('lyricCurrent').textContent = '♪';
+    $('lyricRomanized').textContent = '';
+    $('lyricNext').textContent = currentLyrics[0]?.text || '';
+    currentLyricLine = -1;
+  }
 }
 function startTransportLoop() {
   cancelAnimationFrame(transportRaf);
@@ -872,7 +890,10 @@ async function playResolvedSong(song) {
     const binary = await midiEngine.playSong(song);
     currentLyrics = parseMidiLyrics(binary);
     currentLyricLine = -1;
-    if (!currentLyrics.length) $('lyricCurrent').textContent = '♪';
+    $('lyricCurrent').textContent = '♪';
+    $('lyricPrev').textContent = '';
+    $('lyricRomanized').textContent = '';
+    $('lyricNext').textContent = currentLyrics[0]?.text || '';
     showToast(`PLAYING · ${cleanSongTitle(song.title)}`); sfx.confirm(); startTransportLoop();
   } catch (error) {
     console.error(error); currentSong = null; currentLyrics = []; setMode('idle'); showToast(`MIDI ERROR · ${error.message || error}`, 5200); sfx.error();
