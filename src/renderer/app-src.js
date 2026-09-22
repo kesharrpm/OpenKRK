@@ -62,7 +62,8 @@ const DEFAULT_PREFS = {
   sfxVolume: 45,
   romanizedEnabled: true,
   lyricDelayMs: 0,
-  uiThemeVersion: 2
+  uiThemeVersion: 3,
+  themeMode: 'dark'
 };
 
 let prefs = loadPrefs();
@@ -83,19 +84,25 @@ let startupComplete = false;
 let introTimer = null;
 let songIntroTimer = null;
 let lastLibraryStatus = { root: '', bgvRoot: '', count: 0, visualCount: 0 };
+let latestPool = [];
+let latestOrder = [];
+let latestCursor = 0;
+let latestRotateTimer = null;
+let artworkRequestToken = 0;
 
 function loadPrefs() {
   try {
     const saved = JSON.parse(localStorage.getItem('openkrk-ui-prefs') || '{}');
     const merged = { ...DEFAULT_PREFS, ...saved };
-    if (!saved.uiThemeVersion || Number(saved.uiThemeVersion) < 2) {
+    if (!saved.uiThemeVersion || Number(saved.uiThemeVersion) < 3) {
       if (!saved.systemFont || saved.systemFont === 'condensed') merged.systemFont = 'system';
       if (!saved.lyricFont || saved.lyricFont === 'condensed' || saved.lyricFont === 'rounded') merged.lyricFont = 'karaoke';
-      merged.uiThemeVersion = 2;
+      merged.uiThemeVersion = 3;
+      if (!saved.themeMode) merged.themeMode = 'dark';
       localStorage.setItem('openkrk-ui-prefs', JSON.stringify(merged));
     }
     return merged;
-  } catch { return { ...DEFAULT_PREFS, uiThemeVersion: 2 }; }
+  } catch { return { ...DEFAULT_PREFS, uiThemeVersion: 3 }; }
 }
 function savePrefs() { localStorage.setItem('openkrk-ui-prefs', JSON.stringify(prefs)); }
 function cleanSongTitle(value = '') {
@@ -111,7 +118,10 @@ function setLyricDelay(value, announce = false) {
   savePrefs();
   if ($('lyricDelay')) $('lyricDelay').value = prefs.lyricDelayMs;
   if ($('lyricDelayValue')) $('lyricDelayValue').textContent = formatLyricDelay(prefs.lyricDelayMs);
-  if ($('lyricDelayHud')) $('lyricDelayHud').textContent = 'LYRIC ' + formatLyricDelay(prefs.lyricDelayMs);
+  if ($('lyricDelayHud')) {
+    $('lyricDelayHud').textContent = 'SYNC ' + formatLyricDelay(prefs.lyricDelayMs);
+    $('lyricDelayHud').classList.toggle('active', Math.abs(prefs.lyricDelayMs) >= 25);
+  }
   if (announce) showToast('LYRIC DELAY · ' + formatLyricDelay(prefs.lyricDelayMs));
 }
 function localFileUrl(filePath) {
@@ -129,6 +139,11 @@ function installCustomFont(slot, filePath) {
 function applyPrefs() {
   document.documentElement.style.setProperty('--ui-scale', String((Number(prefs.uiScale) || 100) / 100));
   document.documentElement.style.setProperty('--lyric-scale', String((Number(prefs.lyricScale) || 100) / 100));
+  const requestedTheme = prefs.themeMode || 'dark';
+  const resolvedTheme = requestedTheme === 'auto'
+    ? (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : requestedTheme;
+  stage.dataset.theme = resolvedTheme;
   const systemStack = prefs.systemFont === 'custom' && prefs.systemFontPath ? installCustomFont('system', prefs.systemFontPath) : FONT_STACKS[prefs.systemFont] || FONT_STACKS.system;
   const lyricStack = prefs.lyricFont === 'custom' && prefs.lyricFontPath ? installCustomFont('lyric', prefs.lyricFontPath) : FONT_STACKS[prefs.lyricFont] || FONT_STACKS.karaoke;
   document.documentElement.style.setProperty('--ui', systemStack);
@@ -140,6 +155,7 @@ function applyPrefs() {
   $('lyricScaleValue').textContent = `${prefs.lyricScale}%`;
   $('systemFont').value = prefs.systemFont;
   $('lyricFont').value = prefs.lyricFont;
+  $('themeMode').value = prefs.themeMode || 'dark';
   $('sfxEnabled').value = prefs.sfxEnabled ? 'on' : 'off';
   $('romanizedEnabled').value = prefs.romanizedEnabled ? 'on' : 'off';
   $('sfxVolume').value = prefs.sfxVolume;
@@ -311,16 +327,38 @@ function decodeText(bytes) {
   try { return new TextDecoder('utf-8').decode(bytes).replace(/\0/g, ''); }
   catch { return String.fromCharCode(...bytes).replace(/\0/g, ''); }
 }
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function nearestValue(sorted, target) {
+  if (!sorted.length) return null;
+  let lo = 0, hi = sorted.length - 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (sorted[mid] < target) lo = mid + 1; else hi = mid;
+  }
+  const a = sorted[lo];
+  const b = lo > 0 ? sorted[lo - 1] : null;
+  if (b == null) return a;
+  return Math.abs(a - target) < Math.abs(b - target) ? a : b;
+}
+
 function parseMidiLyrics(arrayBuffer) {
   try {
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
     if (bytes.length < 14 || String.fromCharCode(...bytes.slice(0, 4)) !== 'MThd') return [];
+
     const headerLength = view.getUint32(4, false);
     const trackCount = view.getUint16(10, false);
     const division = view.getUint16(12, false);
     if (division & 0x8000) return [];
     const ppq = division || 480;
+
     let pos = 8 + headerLength;
     const tempos = [{ tick: 0, us: 500000 }];
     const tracks = [];
@@ -330,19 +368,24 @@ function parseMidiLyrics(arrayBuffer) {
       const length = view.getUint32(pos + 4, false);
       pos += 8;
       if (tag !== 'MTrk' || pos + length > bytes.length) { pos += length; continue; }
+
       const end = pos + length;
       const state = { pos };
       let tick = 0;
       let running = 0;
       let trackName = '';
       const texts = [];
+      const notes = [];
+
       while (state.pos < end) {
         tick += readVlq(bytes, state);
         if (state.pos >= end) break;
+
         let status = bytes[state.pos++];
         if (status < 0x80) { state.pos -= 1; status = running; }
         else if (status < 0xf0) running = status;
         if (!status) break;
+
         if (status === 0xff) {
           const type = bytes[state.pos++];
           const metaLength = readVlq(bytes, state);
@@ -355,11 +398,22 @@ function parseMidiLyrics(arrayBuffer) {
           if (type === 0x05 || type === 0x01) texts.push({ tick, type, text: decodeText(payload) });
           continue;
         }
-        if (status === 0xf0 || status === 0xf7) { state.pos = Math.min(end, state.pos + readVlq(bytes, state)); continue; }
+
+        if (status === 0xf0 || status === 0xf7) {
+          state.pos = Math.min(end, state.pos + readVlq(bytes, state));
+          continue;
+        }
+
         const hi = status & 0xf0;
-        state.pos = Math.min(end, state.pos + (hi === 0xc0 || hi === 0xd0 ? 1 : 2));
+        const channel = status & 0x0f;
+        const size = hi === 0xc0 || hi === 0xd0 ? 1 : 2;
+        const data1 = bytes[state.pos] ?? 0;
+        const data2 = size > 1 ? (bytes[state.pos + 1] ?? 0) : 0;
+        if (hi === 0x90 && data2 > 0 && channel !== 9) notes.push({ tick, pitch: data1, channel });
+        state.pos = Math.min(end, state.pos + size);
       }
-      tracks.push({ name: trackName, texts });
+
+      tracks.push({ name: trackName, texts, notes });
       pos = end;
     }
 
@@ -369,64 +423,162 @@ function parseMidiLyrics(arrayBuffer) {
       if (compactTempos.length && compactTempos[compactTempos.length - 1].tick === tempo.tick) compactTempos[compactTempos.length - 1] = tempo;
       else compactTempos.push(tempo);
     }
+
     const tempoSegments = [];
     let sec = 0, lastTick = 0, us = 500000;
     for (const tempo of compactTempos) {
       if (tempo.tick > lastTick) sec += ((tempo.tick - lastTick) * us) / (ppq * 1_000_000);
       tempoSegments.push({ tick: tempo.tick, sec, us: tempo.us });
-      lastTick = tempo.tick; us = tempo.us;
+      lastTick = tempo.tick;
+      us = tempo.us;
     }
+
     const tickToSec = tick => {
       let segment = tempoSegments[0] || { tick: 0, sec: 0, us: 500000 };
-      for (let i = 1; i < tempoSegments.length; i += 1) { if (tempoSegments[i].tick > tick) break; segment = tempoSegments[i]; }
+      for (let i = 1; i < tempoSegments.length; i += 1) {
+        if (tempoSegments[i].tick > tick) break;
+        segment = tempoSegments[i];
+      }
       return segment.sec + ((tick - segment.tick) * segment.us) / (ppq * 1_000_000);
     };
 
-    const candidate = tracks.map(track => ({
-      ...track,
-      useful: track.texts.filter(item => item.type === 0x05 || !String(item.text).startsWith('@')).length,
-      lyricCount: track.texts.filter(item => item.type === 0x05).length
-    })).sort((a, b) => (b.lyricCount * 3 + b.useful + (/lyric|kara/i.test(b.name) ? 20 : 0)) - (a.lyricCount * 3 + a.useful + (/lyric|kara/i.test(a.name) ? 20 : 0)))[0];
-    if (!candidate || !candidate.texts.length) return [];
+    const scored = tracks.map(track => {
+      const lyricEvents = track.texts.filter(item => item.type === 0x05);
+      const usefulText = track.texts.filter(item => {
+        const text = String(item.text || '').trim();
+        if (!text || text.startsWith('@')) return false;
+        if (item.tick === 0 && /^(title|artist|composer|copyright|words|music)\b/i.test(text)) return false;
+        return true;
+      });
+      const nameBonus = /lyric|vocal|kara|words|melody|guide/i.test(track.name || '') ? 40 : 0;
+      return { ...track, lyricEvents, usefulText, score: lyricEvents.length * 5 + usefulText.length + nameBonus };
+    }).sort((a, b) => b.score - a.score);
 
-    const events = candidate.texts.filter(item => item.text && !item.text.trim().startsWith('@')).map(item => ({ time: tickToSec(item.tick), text: item.text })).sort((a, b) => a.time - b.time);
+    const candidate = scored[0];
+    if (!candidate || candidate.usefulText.length < 2) return [];
+
+    const sourceEvents = candidate.lyricEvents.length >= Math.max(2, candidate.usefulText.length * 0.35)
+      ? candidate.lyricEvents
+      : candidate.usefulText;
+
+    let events = sourceEvents
+      .filter(item => {
+        const text = String(item.text || '').trim();
+        return text && !text.startsWith('@') && !(item.tick === 0 && /^(title|artist|composer|copyright|words|music)\b/i.test(text));
+      })
+      .map(item => ({ tick: item.tick, time: tickToSec(item.tick), text: String(item.text || '') }))
+      .sort((a, b) => a.time - b.time);
+
+    if (!events.length) return [];
+
+    // Find the note track whose note onsets line up best with lyric events.
+    let bestNoteTimes = [];
+    let bestAlignmentScore = 0;
+    for (const track of tracks) {
+      if (track.notes.length < 4) continue;
+      const times = track.notes.map(note => tickToSec(note.tick)).sort((a, b) => a - b);
+      let hits = 0;
+      let error = 0;
+      for (const event of events) {
+        const nearest = nearestValue(times, event.time);
+        const diff = nearest == null ? Infinity : Math.abs(nearest - event.time);
+        if (diff <= 0.34) { hits += 1; error += diff; }
+      }
+      const hitRate = hits / events.length;
+      const avgError = hits ? error / hits : 1;
+      const densityPenalty = Math.min(0.35, Math.abs(times.length - events.length) / Math.max(times.length, events.length) * 0.2);
+      const nameBonus = /vocal|melody|guide|lead|sing/i.test(track.name || '') ? 0.18 : 0;
+      const score = hitRate - avgError * 0.55 - densityPenalty + nameBonus;
+      if (score > bestAlignmentScore) { bestAlignmentScore = score; bestNoteTimes = times; }
+    }
+
+    // Estimate a stable global lyric offset from the guide/melody note onsets.
+    let autoOffset = 0;
+    if (bestNoteTimes.length && bestAlignmentScore > 0.33) {
+      const diffs = [];
+      for (const event of events) {
+        const nearest = nearestValue(bestNoteTimes, event.time);
+        if (nearest != null && Math.abs(nearest - event.time) <= 0.34) diffs.push(nearest - event.time);
+      }
+      if (diffs.length >= Math.min(8, Math.ceil(events.length * 0.35))) {
+        const med = median(diffs);
+        const mad = median(diffs.map(value => Math.abs(value - med)));
+        if (mad < 0.17) autoOffset = Math.max(-0.55, Math.min(0.55, med));
+      }
+    }
+
+    events = events.map(event => {
+      let time = Math.max(0, event.time + autoOffset);
+      if (bestNoteTimes.length && bestAlignmentScore > 0.48) {
+        const nearest = nearestValue(bestNoteTimes, time);
+        if (nearest != null && Math.abs(nearest - time) <= 0.095) time = nearest;
+      }
+      return { ...event, time };
+    });
+
     const lines = [];
     let segments = [];
+
+    const lineText = () => segments.map(segment => segment.text).join('').replace(/\s+/g, ' ').trim();
     const pushLine = explicitEnd => {
       if (!segments.length) return;
-      const text = segments.map(segment => segment.text).join('').replace(/\s+/g, ' ').trim();
+      const text = lineText();
       if (!text) { segments = []; return; }
       lines.push({ start: segments[0].start, explicitEnd, text, segments: segments.map(segment => ({ ...segment })) });
       segments = [];
     };
 
+    const addSegment = (text, time) => {
+      const normalized = String(text || '').replace(/\^/g, ' ').replace(/\s+/g, ' ');
+      if (!normalized.trim()) return;
+      if (segments.length) {
+        const previous = segments[segments.length - 1];
+        const gap = time - previous.start;
+        const currentText = lineText();
+        const punctuated = /[.!?…,:;]$/.test(currentText);
+        if (gap > 1.65 || (gap > .82 && punctuated) || (gap > .58 && currentText.length > 48)) pushLine(time);
+      }
+      segments.push({ text: normalized, start: time });
+    };
+
     for (const event of events) {
       let buffer = '';
-      const flushBuffer = () => {
-        if (!buffer) return;
-        const normalized = buffer.replace(/\^/g, ' ');
-        if (normalized) segments.push({ text: normalized, start: event.time });
+      const flush = () => {
+        if (buffer) addSegment(buffer, event.time);
         buffer = '';
       };
       for (const char of event.text.replace(/\r/g, '\n')) {
-        if (char === '/' || char === '\\' || char === '\n') { flushBuffer(); pushLine(event.time); }
-        else buffer += char;
+        if (char === '/' || char === '\\' || char === '\n') {
+          flush();
+          pushLine(event.time);
+        } else {
+          buffer += char;
+        }
       }
-      flushBuffer();
+      flush();
     }
     pushLine(null);
 
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       const nextLineStart = lines[i + 1]?.start;
-      const fallbackEnd = Number.isFinite(nextLineStart) ? nextLineStart : line.segments[line.segments.length - 1].start + 3.2;
-      line.end = Math.max(line.start + 0.25, Number.isFinite(line.explicitEnd) ? Math.max(line.explicitEnd, line.segments[line.segments.length - 1].start + 0.15) : fallbackEnd);
+      const lastStart = line.segments[line.segments.length - 1].start;
+      const naturalLineEnd = Number.isFinite(nextLineStart) ? Math.max(line.start + .35, nextLineStart - .04) : lastStart + 2.4;
+      line.end = Math.max(line.start + .35, Number.isFinite(line.explicitEnd) ? Math.max(line.explicitEnd, lastStart + .16) : naturalLineEnd);
+
+      const gaps = [];
+      for (let s = 1; s < line.segments.length; s += 1) gaps.push(line.segments[s].start - line.segments[s - 1].start);
+      const medianGap = Math.max(.18, Math.min(1.2, median(gaps.filter(value => value > .03)) || .55));
+
       for (let s = 0; s < line.segments.length; s += 1) {
         const segment = line.segments[s];
         const nextStart = line.segments[s + 1]?.start;
-        segment.end = Math.max(segment.start + 0.08, Number.isFinite(nextStart) ? nextStart : line.end);
+        const desiredEnd = Number.isFinite(nextStart) ? nextStart : Math.min(line.end, segment.start + medianGap * 1.15);
+        segment.end = Math.max(segment.start + .09, Math.min(desiredEnd, segment.start + 1.55));
       }
     }
+
+    lines.autoOffset = autoOffset;
     return lines;
   } catch (error) {
     console.warn('[OpenKRK] lyric parser:', error);
@@ -457,7 +609,7 @@ function renderCode() { codeDisplay.textContent = codeBuffer ? codeBuffer.split(
 function pushDigit(digit) {
   if (!startupComplete) return;
   if (mode !== 'idle' && mode !== 'player') return;
-  if (codeBuffer.length >= 7) codeBuffer = '';
+  if (codeBuffer.length >= 5) codeBuffer = '';
   codeBuffer += digit;
   renderCode();
 }
@@ -546,7 +698,7 @@ async function chooseLibraryFolder() {
   const result = await window.openkrk?.chooseLibraryFolder?.();
   if (!result || result.canceled) return;
   await Promise.all([refreshLibraryStatus(), refreshVisualCatalog(true)]);
-  showToast(`${formatCount(result.count)} songs · ${formatCount(result.visualCount)} visuals indexed`);
+  showToast('Song library updated');
   sfx.confirm();
   await renderLatestSongs();
   return result;
@@ -556,7 +708,7 @@ async function chooseVisualSource() {
   if (!result || result.canceled) return;
   activeVisualCategory = 'ALL';
   await refreshVisualCatalog(true);
-  showToast(`${formatCount(result.count)} visuals categorized from folder names`);
+  showToast('Background videos updated');
   sfx.confirm();
   updateSetupUi(lastLibraryStatus);
   return result;
@@ -590,17 +742,102 @@ function formatFreshDate(value) {
   return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' }).toUpperCase();
 }
 
+function shuffled(items) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+async function loadArtworkInto(element, url) {
+  if (!url || !element) return;
+  try {
+    const data = await window.openkrk?.getArtworkData?.(url);
+    if (!data || !element.isConnected) return;
+    const image = document.createElement('img');
+    image.className = 'new-song-art';
+    image.alt = '';
+    image.src = data;
+    element.replaceWith(image);
+  } catch {}
+}
+
+function renderLatestPage() {
+  if (!latestPool.length) return;
+  if (!latestOrder.length || latestCursor + 8 > latestOrder.length) {
+    latestOrder = shuffled(latestPool);
+    latestCursor = 0;
+  }
+  const rows = latestOrder.slice(latestCursor, latestCursor + 8);
+  latestCursor += rows.length;
+
+  newSongsList.classList.add('rotating');
+  setTimeout(() => {
+    newSongsList.replaceChildren();
+    rows.forEach((song, index) => {
+      const row = document.createElement('div');
+      row.className = 'new-song-row';
+      row.tabIndex = 0;
+
+      const art = document.createElement('div');
+      art.className = 'new-song-art placeholder';
+      art.textContent = '♪';
+
+      const code = document.createElement('span');
+      code.className = 'new-song-code';
+      code.textContent = song.code || String(index + 1).padStart(4, '0');
+
+      const title = document.createElement('strong');
+      title.className = 'new-song-title';
+      title.textContent = cleanSongTitle(song.title || 'Untitled');
+
+      const artist = document.createElement('span');
+      artist.className = 'new-song-artist';
+      artist.textContent = song.artist || 'Unknown Artist';
+
+      const accept = () => {
+        codeBuffer = String(song.code || '');
+        renderCode();
+        idleCurrentCode.textContent = song.code || '—';
+        idleCurrentTitle.textContent = cleanSongTitle(song.title || 'Untitled') + ' · ' + (song.artist || 'Unknown Artist');
+        sfx.confirm();
+      };
+
+      row.append(art, code, title, artist);
+      row.addEventListener('click', accept);
+      row.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); accept(); }
+      });
+      newSongsList.appendChild(row);
+
+      const artwork = song.discovery?.artworkUrl || '';
+      if (artwork) loadArtworkInto(art, artwork);
+    });
+    requestAnimationFrame(() => newSongsList.classList.remove('rotating'));
+  }, 170);
+}
+
+function startLatestRotation() {
+  clearInterval(latestRotateTimer);
+  if (latestPool.length <= 8) return;
+  latestRotateTimer = setInterval(() => {
+    if (mode === 'idle') renderLatestPage();
+  }, 6500);
+}
+
 async function renderLatestSongs(force = false) {
-  newSongsSource.textContent = force ? 'UPDATING ONLINE CATALOG…' : 'CHECKING ONLINE CATALOG…';
+  newSongsSource.textContent = force ? 'REFRESHING…' : 'FINDING RECENT TRACKS…';
   newSongsList.replaceChildren();
   const waiting = document.createElement('div');
   waiting.className = 'new-song-empty';
-  waiting.textContent = 'Matching current releases against your local MIDI folder…';
+  waiting.textContent = 'Finding recent songs…';
   newSongsList.appendChild(waiting);
 
   let discovery = null;
   try {
-    discovery = await window.openkrk?.discoverCurrentSongs?.(10, force);
+    discovery = await window.openkrk?.discoverCurrentSongs?.(64, force);
   } catch (error) {
     console.warn('[OpenKRK] discovery API:', error);
   }
@@ -608,68 +845,31 @@ async function renderLatestSongs(force = false) {
   let rows = discovery?.items || [];
   let fallback = false;
   if (!rows.length) {
-    rows = await window.openkrk?.getLatestSongs?.(10) || [];
+    rows = await window.openkrk?.getLatestSongs?.(64) || [];
     fallback = true;
   }
 
-  newSongsList.replaceChildren();
+  latestPool = rows;
+  latestOrder = shuffled(rows);
+  latestCursor = 0;
+
   if (!rows.length) {
+    newSongsList.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'new-song-empty';
-    empty.textContent = 'No MIDI / KAR songs found yet.';
+    empty.textContent = 'No songs found.';
     newSongsList.appendChild(empty);
-    newSongsSource.textContent = 'NO LOCAL SONGS';
+    newSongsSource.textContent = 'NO SONGS';
+    clearInterval(latestRotateTimer);
     return;
   }
 
-  if (fallback) {
-    newSongsSource.textContent = discovery?.source === 'OFFLINE'
-      ? 'OFFLINE · LOCAL RECENT FALLBACK'
-      : 'NO API MATCHES · LOCAL RECENT FALLBACK';
-  } else {
-    const sourceText = (discovery.sources || []).join(' + ') || 'ONLINE';
-    newSongsSource.textContent = sourceText + ' · ' + formatCount(discovery.matchedCount || rows.length) + ' LOCAL MATCHES';
-  }
+  newSongsSource.textContent = fallback
+    ? 'RECENT SONGS'
+    : 'GLOBAL · ' + formatCount(discovery?.matchedCount || rows.length) + ' FOUND';
 
-  rows.slice(0, 10).forEach((song, index) => {
-    const row = document.createElement('div');
-    row.className = 'new-song-row';
-    row.tabIndex = 0;
-
-    const code = document.createElement('span');
-    code.className = 'new-song-code';
-    code.textContent = song.code || String(index + 1).padStart(2, '0');
-
-    const title = document.createElement('strong');
-    title.className = 'new-song-title';
-    title.textContent = cleanSongTitle(song.title || 'Untitled');
-
-    const artist = document.createElement('span');
-    artist.className = 'new-song-artist';
-    artist.textContent = song.artist || 'Unknown Artist';
-
-    const added = document.createElement('span');
-    added.className = 'new-song-date';
-    const apiDate = song.discovery?.releaseDate || '';
-    added.textContent = apiDate ? apiDate.slice(0, 10) : formatFreshDate(song.firstSeenAt || song.mtimeMs);
-    if (song.discovery?.source) row.title = 'Matched from ' + song.discovery.source;
-
-    const accept = () => {
-      codeBuffer = String(song.code || '');
-      renderCode();
-      idleCurrentCode.textContent = song.code || '—';
-      idleCurrentTitle.textContent = (song.title || 'Untitled') + ' - ' + (song.artist || 'Unknown Artist');
-      showToast((song.code || 'LOCAL') + ' · ' + (song.title || 'Untitled'));
-      sfx.confirm();
-    };
-
-    row.append(code, title, artist, added);
-    row.addEventListener('click', accept);
-    row.addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); accept(); }
-    });
-    newSongsList.appendChild(row);
-  });
+  renderLatestPage();
+  startLatestRotation();
 }
 
 function showSetup() {
@@ -747,20 +947,26 @@ async function bootstrapRoom() {
 }
 
 function renderMetadataCard(song, metadata = null) {
-  $('metaTitle').textContent = cleanSongTitle(metadata?.title || song?.title || 'Untitled');
-  $('metaArtist').textContent = metadata?.artist || song?.artist || 'Unknown Artist';
-  $('metaAlbum').textContent = metadata?.album || 'Local MIDI / album not matched';
-  const credits = Array.isArray(metadata?.composers) ? metadata.composers.map(item => item.name + (item.role ? ' · ' + item.role : '')).join(' / ') : '';
-  $('metaCredits').textContent = credits || (metadata?.matched ? 'Credits not listed in matched work' : 'Local metadata only');
-  $('metaReleaseDate').textContent = metadata?.releaseDate || 'LOCAL MIDI';
+  const title = cleanSongTitle(metadata?.title || song?.title || 'Untitled');
+  const artist = metadata?.artist || song?.artist || 'Unknown Artist';
+  $('metaTitle').textContent = title;
+  $('metaArtist').textContent = artist;
+  $('metaAlbum').textContent = metadata?.album || '';
+  $('metaCredits').textContent = '';
+  $('metaReleaseDate').textContent = metadata?.releaseDate || '';
 
-  const art = metadata?.coverArtUrl || '';
+  const requestToken = ++artworkRequestToken;
   songCoverFallback.style.display = '';
   songCover.removeAttribute('src');
-  if (art) {
-    songCover.onload = () => { songCoverFallback.style.display = 'none'; };
-    songCover.onerror = () => { songCover.removeAttribute('src'); songCoverFallback.style.display = ''; };
-    songCover.src = art;
+
+  const artwork = metadata?.artworkUrl || song?.discovery?.artworkUrl || '';
+  if (artwork) {
+    window.openkrk?.getArtworkData?.(artwork).then(data => {
+      if (!data || requestToken !== artworkRequestToken || currentSong !== song) return;
+      songCover.onload = () => { songCoverFallback.style.display = 'none'; };
+      songCover.onerror = () => { songCover.removeAttribute('src'); songCoverFallback.style.display = ''; };
+      songCover.src = data;
+    }).catch(() => {});
   }
 }
 
@@ -846,20 +1052,29 @@ function renderLyricLine(index, time) {
 }
 function updateLyrics(time) {
   if (!currentLyrics.length) return;
-  let index = currentLyrics.findIndex(line => time >= line.start && time < line.end);
-  if (index < 0) {
-    index = currentLyrics.findLastIndex ? currentLyrics.findLastIndex(line => line.start <= time) : (() => { let found = -1; for (let i = 0; i < currentLyrics.length; i += 1) if (currentLyrics[i].start <= time) found = i; return found; })();
+
+  const activeIndex = currentLyrics.findIndex(line => time >= line.start && time < line.end);
+  if (activeIndex >= 0) {
+    renderLyricLine(activeIndex, time);
+    return;
   }
-  if (index >= 0) {
-    renderLyricLine(index, time);
-  } else {
-    $('lyricPrev').textContent = '';
-    $('lyricCurrent').textContent = '♪';
-    $('lyricRomanized').textContent = '';
-    $('lyricNext').textContent = currentLyrics[0]?.text || '';
-    currentLyricLine = -1;
+
+  let previousIndex = -1;
+  let nextIndex = -1;
+  for (let i = 0; i < currentLyrics.length; i += 1) {
+    if (currentLyrics[i].start <= time) previousIndex = i;
+    else { nextIndex = i; break; }
   }
+
+  const current = $('lyricCurrent');
+  current.replaceChildren();
+  current.textContent = '♪';
+  $('lyricPrev').textContent = previousIndex >= 0 ? currentLyrics[previousIndex].text : '';
+  $('lyricNext').textContent = nextIndex >= 0 ? currentLyrics[nextIndex].text : '';
+  $('lyricRomanized').textContent = '';
+  currentLyricLine = -1;
 }
+
 function startTransportLoop() {
   cancelAnimationFrame(transportRaf);
   const tick = () => {
@@ -894,7 +1109,7 @@ async function playResolvedSong(song) {
     $('lyricPrev').textContent = '';
     $('lyricRomanized').textContent = '';
     $('lyricNext').textContent = currentLyrics[0]?.text || '';
-    showToast(`PLAYING · ${cleanSongTitle(song.title)}`); sfx.confirm(); startTransportLoop();
+    sfx.confirm(); startTransportLoop();
   } catch (error) {
     console.error(error); currentSong = null; currentLyrics = []; setMode('idle'); showToast(`MIDI ERROR · ${error.message || error}`, 5200); sfx.error();
   }
@@ -942,6 +1157,7 @@ async function chooseCustomFont(slot) {
 
 searchInput.addEventListener('input', () => { clearTimeout(searchTimer); const value = searchInput.value; searchTimer = setTimeout(() => performSearch(value), 90); });
 $('uiScale').addEventListener('input', event => { prefs.uiScale = Number(event.target.value); savePrefs(); applyPrefs(); });
+$('themeMode').addEventListener('change', event => { prefs.themeMode = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
 $('lyricScale').addEventListener('input', event => { prefs.lyricScale = Number(event.target.value); savePrefs(); applyPrefs(); });
 $('lyricDelay').addEventListener('input', event => { setLyricDelay(event.target.value, false); });
 $('systemFont').addEventListener('change', event => { prefs.systemFont = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
@@ -1009,6 +1225,9 @@ document.addEventListener('keydown', async event => {
   if (event.key === 'F11') { event.preventDefault(); await window.openkrk?.toggleFullscreen?.(); }
 });
 
+window.matchMedia?.('(prefers-color-scheme: light)').addEventListener?.('change', () => {
+  if (prefs.themeMode === 'auto') applyPrefs();
+});
 applyPrefs();
 setLyricDelay(prefs.lyricDelayMs, false);
 renderCode();
