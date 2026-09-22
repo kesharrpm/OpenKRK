@@ -250,11 +250,13 @@ async function fetchAppleGlobalCharts() {
   const storefronts = [
     ['us', 'US'], ['gb', 'UK'], ['ca', 'Canada'], ['au', 'Australia'],
     ['jp', 'Japan'], ['kr', 'Korea'], ['de', 'Germany'], ['fr', 'France'],
-    ['br', 'Brazil'], ['mx', 'Mexico'], ['za', 'South Africa'], ['sg', 'Singapore']
+    ['br', 'Brazil'], ['mx', 'Mexico'], ['za', 'South Africa'], ['sg', 'Singapore'],
+    ['es', 'Spain'], ['it', 'Italy'], ['nl', 'Netherlands'], ['se', 'Sweden'],
+    ['no', 'Norway'], ['nz', 'New Zealand'], ['id', 'Indonesia'], ['th', 'Thailand']
   ];
 
   const responses = await Promise.allSettled(storefronts.map(async ([code, label]) => {
-    const url = 'https://rss.applemarketingtools.com/api/v2/' + code + '/music/most-played/50/songs.json';
+    const url = 'https://rss.applemarketingtools.com/api/v2/' + code + '/music/most-played/100/songs.json';
     const json = await fetchJsonWithTimeout(url);
     return (json?.feed?.results || []).map((item, index) => ({
       title: item.name || '',
@@ -272,14 +274,10 @@ async function fetchAppleGlobalCharts() {
     for (const item of response.value) {
       const key = cleanDiscoveryText(item.title) + '|' + cleanDiscoveryText(item.artist);
       if (!key || key === '|') continue;
-      const score = Math.max(1, 51 - item.rank);
+      const score = Math.max(1, 101 - item.rank);
       const existing = merged.get(key);
       if (!existing) {
-        merged.set(key, {
-          ...item,
-          markets: [item.market],
-          globalScore: score
-        });
+        merged.set(key, { ...item, markets: [item.market], globalScore: score });
       } else {
         existing.globalScore += score;
         if (!existing.markets.includes(item.market)) existing.markets.push(item.market);
@@ -294,7 +292,7 @@ async function fetchAppleGlobalCharts() {
 
   return [...merged.values()]
     .sort((a, b) => (b.globalScore - a.globalScore) || (a.rank - b.rank))
-    .slice(0, 250)
+    .slice(0, 700)
     .map(item => ({
       title: item.title,
       artist: item.artist,
@@ -308,24 +306,37 @@ async function fetchAppleGlobalCharts() {
     }));
 }
 
-async function fetchMusicBrainzRecentReleases() {
+async function fetchMusicBrainzRecentRecordings() {
   const end = new Date();
-  const start = new Date(end.getTime() - 75 * 24 * 60 * 60 * 1000);
+  const start = new Date(end.getTime() - 150 * 24 * 60 * 60 * 1000);
   const iso = date => date.toISOString().slice(0, 10);
-  const url = new URL('https://musicbrainz.org/ws/2/release/');
-  url.searchParams.set('query', 'date:[' + iso(start) + ' TO ' + iso(end) + '] AND status:official');
-  url.searchParams.set('fmt', 'json');
-  url.searchParams.set('limit', '100');
-  const json = await musicBrainzJson(url);
-  return (json?.releases || []).map(item => ({
-    title: item.title || '',
-    artist: (item['artist-credit'] || []).map(credit => credit.name || credit.artist?.name).filter(Boolean).join(''),
-    releaseDate: item.date || '',
-    artworkUrl: item.id ? 'https://coverartarchive.org/release/' + item.id + '/front-250' : '',
-    source: 'MusicBrainz Recent',
-    sourceKind: 'release',
-    rank: 999
-  }));
+  const found = [];
+
+  for (const offset of [0, 100, 200]) {
+    const url = new URL('https://musicbrainz.org/ws/2/recording/');
+    url.searchParams.set('query', 'firstreleasedate:[' + iso(start) + ' TO ' + iso(end) + ']');
+    url.searchParams.set('fmt', 'json');
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('offset', String(offset));
+    const json = await musicBrainzJson(url);
+    for (const item of json?.recordings || []) {
+      const artist = (item['artist-credit'] || []).map(credit => credit.name || credit.artist?.name).filter(Boolean).join('');
+      if (!item.title || !artist) continue;
+      found.push({
+        title: item.title,
+        artist,
+        releaseDate: item['first-release-date'] || '',
+        artworkUrl: '',
+        source: 'MusicBrainz Recent',
+        sourceKind: 'release',
+        rank: 999
+      });
+    }
+  }
+
+  return found
+    .sort((a, b) => (Date.parse(b.releaseDate || '') || 0) - (Date.parse(a.releaseDate || '') || 0))
+    .slice(0, 300);
 }
 
 function discoverySortValue(item) {
@@ -335,37 +346,11 @@ function discoverySortValue(item) {
   return time + sourceBoost + rankBoost;
 }
 
-async function discoverCurrentLibrarySongs(limit = 10, force = false) {
-  const max = Math.max(1, Math.min(Number(limit) || 36, 80));
-  const cached = readJson(discoveryCacheFile(), null);
-  const cacheAge = cached?.fetchedAt ? Date.now() - Number(cached.fetchedAt) : Infinity;
-  if (!force && cached?.version === 2 && cached?.items?.length && cacheAge < 6 * 60 * 60 * 1000) {
-    const byCode = new Map(songIndex.map(song => [String(song.code), song]));
-    const restored = cached.items.map(item => {
-      const song = byCode.get(String(item.code));
-      return song ? { ...song, discovery: item.discovery } : null;
-    }).filter(Boolean).slice(0, max);
-    if (restored.length) return { ...cached, items: restored, cached: true };
-  }
-
-  const candidates = [];
-  const errors = [];
-  const results = await Promise.allSettled([
-    fetchAppleGlobalCharts(),
-    fetchMusicBrainzRecentReleases()
-  ]);
-  for (const result of results) {
-    if (result.status === 'fulfilled') candidates.push(...result.value);
-    else errors.push(result.reason?.message || String(result.reason));
-  }
-
-  const byTitle = buildDiscoveryLookup();
+function matchDiscoveryList(candidates, byTitle, max) {
   const matched = [];
   const usedCodes = new Set();
-  const recentCutoff = Date.now() - (540 * 24 * 60 * 60 * 1000);
+
   for (const candidate of candidates) {
-    const candidateDate = Date.parse(candidate.releaseDate || '') || 0;
-    if (candidate.sourceKind === 'chart' && candidateDate && candidateDate < recentCutoff) continue;
     const song = matchDiscoveryCandidate(candidate, byTitle);
     if (!song || usedCodes.has(String(song.code))) continue;
     usedCodes.add(String(song.code));
@@ -383,39 +368,135 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
         markets: candidate.markets || []
       }
     });
+    if (matched.length >= max) break;
+  }
+  return matched;
+}
+
+async function discoverCurrentLibrarySongs(limit = 36, force = false) {
+  const max = Math.max(8, Math.min(Number(limit) || 48, 96));
+  const cached = readJson(discoveryCacheFile(), null);
+  const cacheAge = cached?.fetchedAt ? Date.now() - Number(cached.fetchedAt) : Infinity;
+
+  const restore = entries => {
+    const byCode = new Map(songIndex.map(song => [String(song.code), song]));
+    return (entries || []).map(item => {
+      const song = byCode.get(String(item.code));
+      return song ? { ...song, discovery: item.discovery } : null;
+    }).filter(Boolean).slice(0, max);
+  };
+
+  if (!force && cached?.version === 3 && cacheAge < 6 * 60 * 60 * 1000) {
+    const newItems = restore(cached.newItems);
+    const topItems = restore(cached.topItems);
+    const items = [...newItems, ...topItems.filter(item => !newItems.some(n => n.code === item.code))].slice(0, max);
+    if (items.length) return { ...cached, newItems, topItems, items, cached: true };
   }
 
-  matched.sort((a, b) => discoverySortValue(b.discovery) - discoverySortValue(a.discovery));
-  const items = matched.slice(0, max);
+  const errors = [];
+  const [chartsResult, recentResult] = await Promise.allSettled([
+    fetchAppleGlobalCharts(),
+    fetchMusicBrainzRecentRecordings()
+  ]);
+
+  const charts = chartsResult.status === 'fulfilled' ? chartsResult.value : [];
+  const recentRecordings = recentResult.status === 'fulfilled' ? recentResult.value : [];
+  if (chartsResult.status === 'rejected') errors.push(chartsResult.reason?.message || String(chartsResult.reason));
+  if (recentResult.status === 'rejected') errors.push(recentResult.reason?.message || String(recentResult.reason));
+
+  const byTitle = buildDiscoveryLookup();
+  const recentCutoff = Date.now() - (180 * 24 * 60 * 60 * 1000);
+  const recentFromCharts = charts
+    .filter(item => (Date.parse(item.releaseDate || '') || 0) >= recentCutoff)
+    .sort((a, b) => (Date.parse(b.releaseDate || '') || 0) - (Date.parse(a.releaseDate || '') || 0));
+
+  const recentCandidates = [...recentRecordings, ...recentFromCharts]
+    .sort((a, b) => (Date.parse(b.releaseDate || '') || 0) - (Date.parse(a.releaseDate || '') || 0));
+
+  const topCandidates = [...charts]
+    .sort((a, b) => (Number(b.globalScore) || 0) - (Number(a.globalScore) || 0));
+
+  const newItems = matchDiscoveryList(recentCandidates, byTitle, max);
+  const topItems = matchDiscoveryList(topCandidates, byTitle, max);
+
+  const items = [...newItems, ...topItems.filter(item => !newItems.some(n => n.code === item.code))].slice(0, max);
   const payload = {
-    version: 2,
+    version: 3,
     fetchedAt: Date.now(),
-    source: results.some(result => result.status === 'fulfilled') ? 'ONLINE' : 'OFFLINE',
+    source: charts.length || recentRecordings.length ? 'ONLINE' : 'OFFLINE',
     sources: [
-      ...(results[0]?.status === 'fulfilled' ? ['Apple Music Global'] : []),
-      ...(results[1]?.status === 'fulfilled' ? ['MusicBrainz Recent'] : [])
+      ...(charts.length ? ['Apple Music Global'] : []),
+      ...(recentRecordings.length ? ['MusicBrainz Recent'] : [])
     ],
-    candidateCount: candidates.length,
-    matchedCount: matched.length,
+    matchedCount: new Set([...newItems, ...topItems].map(item => item.code)).size,
+    newCount: newItems.length,
+    topCount: topItems.length,
     errors,
+    newItems,
+    topItems,
     items
   };
 
+  const compact = list => list.map(item => ({ code: item.code, discovery: item.discovery }));
   writeJson(discoveryCacheFile(), {
     ...payload,
-    items: items.map(item => ({
-      code: item.code,
-      discovery: item.discovery
-    }))
+    newItems: compact(newItems),
+    topItems: compact(topItems),
+    items: compact(items)
   });
   return payload;
+}
+
+async function fetchMusicBrainzProducerInfo(title, artist) {
+  const queryParts = ['recording:"' + escapeMbQuery(title) + '"'];
+  if (artist && artist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(artist) + '"');
+  const searchUrl = new URL('https://musicbrainz.org/ws/2/recording/');
+  searchUrl.searchParams.set('query', queryParts.join(' AND '));
+  searchUrl.searchParams.set('fmt', 'json');
+  searchUrl.searchParams.set('limit', '6');
+
+  const search = await musicBrainzJson(searchUrl);
+  let best = null;
+  let bestScore = 0;
+  for (const candidate of search.recordings || []) {
+    const candidateArtist = (candidate['artist-credit'] || []).map(item => item.name || item.artist?.name).filter(Boolean).join(' ');
+    const titleScore = tokenSimilarity(title, candidate.title || '');
+    const artistScore = tokenSimilarity(artist, candidateArtist);
+    if (titleScore < .84 || (artist && artist !== 'Unknown Artist' && artistScore < .58)) continue;
+    const score = titleScore * .72 + artistScore * .28;
+    if (score > bestScore) { best = candidate; bestScore = score; }
+  }
+  if (!best) return { producers: [], album: '', artworkUrl: '', releaseDate: '' };
+
+  const detailUrl = new URL('https://musicbrainz.org/ws/2/recording/' + best.id);
+  detailUrl.searchParams.set('inc', 'artist-credits+releases+release-groups+artist-rels');
+  detailUrl.searchParams.set('fmt', 'json');
+  const detail = await musicBrainzJson(detailUrl);
+
+  const producers = (detail.relations || [])
+    .filter(rel => /producer/i.test(String(rel.type || '')) && rel.artist?.name)
+    .map(rel => rel.artist.name)
+    .filter((name, index, array) => array.indexOf(name) === index)
+    .slice(0, 4);
+
+  const releases = detail.releases || [];
+  const release = releases.find(item => item.date) || releases[0] || null;
+  const releaseGroupId = release?.['release-group']?.id || '';
+  return {
+    producers,
+    album: release?.title || '',
+    releaseDate: release?.date || detail['first-release-date'] || '',
+    artworkUrl: releaseGroupId
+      ? 'https://coverartarchive.org/release-group/' + releaseGroupId + '/front-500'
+      : (release?.id ? 'https://coverartarchive.org/release/' + release.id + '/front-500' : '')
+  };
 }
 
 async function resolveSongMetadata(song) {
   if (!song?.title) return null;
   const cleanTitle = cleanTransportSuffix(song.title);
   const cleanArtist = cleanTransportSuffix(song.artist || '');
-  const cacheKey = normalize(cleanTitle + '|' + cleanArtist);
+  const cacheKey = 'v2|' + normalize(cleanTitle + '|' + cleanArtist);
   const cached = metadataCache[cacheKey];
   if (cached && Number(cached.cachedAt || 0) > Date.now() - (30 * 24 * 60 * 60 * 1000)) return cached;
 
@@ -424,16 +505,25 @@ async function resolveSongMetadata(song) {
   try {
     const item = await searchItunesTrack(cleanTitle, cleanArtist, Number(song.durationMs) || 0);
     if (item) {
+      let producerInfo = { producers: [], album: '', artworkUrl: '', releaseDate: '' };
+      try { producerInfo = await fetchMusicBrainzProducerInfo(cleanTitle, cleanArtist); } catch {}
+
+      const collectionName = String(item.collectionName || '').trim();
+      const isSingle = /\s[-–—]\s*single$/i.test(collectionName) || /^single$/i.test(collectionName);
+      const producers = producerInfo.producers || [];
+
       metadata = {
         source: 'iTunes Search',
         matched: true,
         title: item.trackName || cleanTitle,
         artist: item.artistName || cleanArtist,
-        album: item.collectionName || '',
-        releaseDate: item.releaseDate || '',
+        album: isSingle ? '' : collectionName,
+        producers,
+        displayTag: isSingle && producers.length ? 'Produced by ' + producers.join(', ') : '',
+        releaseDate: item.releaseDate || producerInfo.releaseDate || '',
         genre: item.primaryGenreName || '',
         durationMs: Number(item.trackTimeMillis) || 0,
-        artworkUrl: item.artworkUrl100 || '',
+        artworkUrl: item.artworkUrl100 || producerInfo.artworkUrl || '',
         storeUrl: item.trackViewUrl || '',
         cachedAt: Date.now()
       };
@@ -466,7 +556,7 @@ async function resolveSongMetadata(song) {
 
       if (recording) {
         const detailUrl = new URL('https://musicbrainz.org/ws/2/recording/' + recording.id);
-        detailUrl.searchParams.set('inc', 'artist-credits+releases+release-groups');
+        detailUrl.searchParams.set('inc', 'artist-credits+releases+release-groups+artist-rels');
         detailUrl.searchParams.set('fmt', 'json');
         let detail = recording;
         try { detail = await musicBrainzJson(detailUrl); } catch {}
@@ -475,12 +565,19 @@ async function resolveSongMetadata(song) {
         const releases = detail.releases || recording.releases || [];
         const release = releases.find(item => item.date) || releases[0] || null;
         const releaseGroupId = release?.['release-group']?.id || detail.releases?.[0]?.['release-group']?.id || '';
+        const producers = (detail.relations || [])
+          .filter(rel => /producer/i.test(String(rel.type || '')) && rel.artist?.name)
+          .map(rel => rel.artist.name)
+          .filter((name, index, array) => array.indexOf(name) === index)
+          .slice(0, 4);
         metadata = {
           source: 'MusicBrainz',
           matched: true,
           title: detail.title || recording.title || cleanTitle,
           artist: artist || cleanArtist,
           album: release?.title || '',
+          producers,
+          displayTag: !release?.title && producers.length ? 'Produced by ' + producers.join(', ') : '',
           releaseDate: release?.date || detail['first-release-date'] || recording['first-release-date'] || '',
           genre: '',
           durationMs: Number(detail.length || recording.length) || 0,
