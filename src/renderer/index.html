@@ -3,14 +3,103 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>OpenKRK</title>
+  <title>OpenKRK — Room Player</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main id="stage" class="stage mode-idle">
+  <main id="stage" class="stage mode-idle startup-active">
     <video id="bgv" class="bgv" muted autoplay playsinline></video>
+    <div class="bg-fallback" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
     <div class="vignette" aria-hidden="true"></div>
-    <div class="grain" aria-hidden="true"></div>
+
+    <section id="bootSurface" class="startup-layer boot-surface" aria-label="Loading songs">
+      <div class="boot-poster" aria-hidden="true">
+        <svg viewBox="0 0 1080 720" role="img">
+          <defs>
+            <linearGradient id="bp0" x1="0" x2="1">
+              <stop offset="0" stop-color="#2ed4d0"/>
+              <stop offset=".44" stop-color="#86eff1"/>
+              <stop offset="1" stop-color="#ff9ac2"/>
+            </linearGradient>
+            <linearGradient id="bp1" x1=".2" y1="0" x2=".8" y2="1">
+              <stop offset="0" stop-color="#ffca37"/>
+              <stop offset="1" stop-color="#ff4f75"/>
+            </linearGradient>
+            <filter id="blur"><feGaussianBlur stdDeviation="30"/></filter>
+          </defs>
+          <rect width="1080" height="720" fill="url(#bp0)"/>
+          <circle cx="815" cy="132" r="210" fill="#22b7c6" opacity=".8"/>
+          <circle cx="195" cy="620" r="260" fill="#ff932d" opacity=".88"/>
+          <path d="M535 34 C690 80 798 237 742 396 C699 517 567 610 402 603 C480 517 477 399 424 319 C370 237 385 112 535 34Z" fill="url(#bp1)" opacity=".9"/>
+          <path d="M-40 400 C205 303 351 340 513 508 C608 607 760 633 1120 522 L1120 760 L-40 760Z" fill="#061927" opacity=".35"/>
+          <g fill="#fff" opacity=".18" filter="url(#blur)">
+            <circle cx="190" cy="170" r="78"/><circle cx="905" cy="512" r="96"/><circle cx="540" cy="350" r="130"/>
+          </g>
+          <g fill="none" stroke="#fff" opacity=".55">
+            <circle cx="915" cy="170" r="58" stroke-width="6"/>
+            <circle cx="915" cy="170" r="34" stroke-width="2"/>
+            <path d="M43 124H340M43 145H248M822 626H1040" stroke-width="2"/>
+          </g>
+        </svg>
+        <div class="boot-poster-wordmark">
+          <span>OPENKRK</span>
+          <b>ROOM PLAYER</b>
+        </div>
+      </div>
+      <div class="boot-readout">
+        <div class="boot-readout-box">
+          <strong>SONGS LOADING<span class="loading-dots">....</span></strong>
+          <small id="bootDetail">Starting local media engine</small>
+        </div>
+        <div class="boot-progress"><i id="bootProgress"></i></div>
+      </div>
+      <div class="boot-build">HTML STAGE / SPESSASYNTH MIDI ENGINE / LOCAL-FIRST</div>
+    </section>
+
+    <section id="setupSurface" class="setup-surface startup-layer" aria-hidden="true">
+      <div class="setup-card">
+        <div class="setup-kicker">FIRST RUN / MEDIA SETUP</div>
+        <h1>Connect your karaoke library.</h1>
+        <p>OpenKRK keeps the songs local. Choose where your MIDI/KAR files live, then point it at your BGV folder. The folders may also be the same folder.</p>
+
+        <div class="setup-grid">
+          <button class="setup-source" data-action="setup-songs">
+            <span class="setup-step">01</span>
+            <strong>SONGS</strong>
+            <small id="setupSongPath">Choose MID / MIDI / KAR folder</small>
+            <b id="setupSongCount">NOT CONNECTED</b>
+          </button>
+          <button class="setup-source" data-action="setup-bgvs">
+            <span class="setup-step">02</span>
+            <strong>BGV</strong>
+            <small id="setupBgvPath">Choose video folder or reuse songs folder</small>
+            <b id="setupBgvCount">OPTIONAL</b>
+          </button>
+          <button class="setup-source" data-action="setup-bank">
+            <span class="setup-step">03</span>
+            <strong>SOUNDBANK</strong>
+            <small id="setupBankPath">Choose SF2 / SF3 / DLS for MIDI playback</small>
+            <b id="setupBankState">REQUIRED TO PLAY</b>
+          </button>
+        </div>
+
+        <div class="setup-foot">
+          <span id="setupHint">Add a songs folder to continue.</span>
+          <button id="setupContinue" data-action="setup-continue" disabled>ENTER ROOM</button>
+        </div>
+      </div>
+      <div class="setup-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+    </section>
+
+    <section id="introSurface" class="intro-surface startup-layer" aria-hidden="true">
+      <div class="intro-lockup">
+        <small>OPENKRK ROOM SYSTEM</small>
+        <strong>VISUAL CHANNEL READY</strong>
+        <span id="introVisualName">BGV PREVIEW</span>
+      </div>
+      <div class="intro-countdown"><i id="introCountdown"></i></div>
+    </section>
 
     <header class="machine-head">
       <div class="brand" aria-label="OpenKRK">
@@ -27,18 +116,42 @@
     </header>
 
     <section id="idleSurface" class="idle-surface">
-      <div class="channel-mark" aria-hidden="true"><span>01</span><b>OPEN SESSION</b></div>
+      <div id="numberConsole" class="number-console top-entry">
+        <div class="number-meta"><span>현재곡 / SONG NUMBER</span><span id="entryMode">DIRECT ENTRY</span></div>
+        <div id="codeDisplay" class="code-display">— — — — —</div>
+        <div class="number-help">TYPE NUMBER · ENTER RESERVE · CTRL+ENTER PLAY</div>
+      </div>
+
+      <section id="newSongsDeck" class="new-songs-deck" aria-label="New songs">
+        <div class="new-songs-banner" aria-hidden="true">
+          <svg viewBox="0 0 760 118" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="ns0" x1="0" x2="1">
+                <stop offset="0" stop-color="#35dce0"/><stop offset=".38" stop-color="#096f90"/><stop offset="1" stop-color="#ff547d"/>
+              </linearGradient>
+            </defs>
+            <rect width="760" height="118" rx="10" fill="url(#ns0)"/>
+            <path d="M0 88 C148 35 244 28 386 82 C493 122 616 111 760 56 V118 H0Z" fill="#04131b" opacity=".44"/>
+            <g fill="#fff" opacity=".18"><circle cx="620" cy="16" r="72"/><circle cx="702" cy="100" r="98"/></g>
+          </svg>
+          <div class="new-songs-title">
+            <small>OPENKRK UPDATE CHANNEL</small>
+            <strong>NEW SONGS</strong>
+            <span>LOCAL DISCOVERY</span>
+          </div>
+        </div>
+        <div class="new-songs-head">
+          <span>#</span><span>SONG</span><span>ARTIST</span><span>ADDED</span>
+        </div>
+        <div id="newSongsList" class="new-songs-list">
+          <div class="new-song-empty">Waiting for local song index…</div>
+        </div>
+      </section>
 
       <div class="room-caption">
         <span class="room-caption-label">ROOM STATUS</span>
         <strong id="roomState">READY</strong>
-        <small id="roomHint">F2 · choose the folder containing songs and BGVs</small>
-      </div>
-
-      <div id="numberConsole" class="number-console">
-        <div class="number-meta"><span>SONG NUMBER</span><span id="entryMode">DIRECT ENTRY</span></div>
-        <div id="codeDisplay" class="code-display">— — — — —</div>
-        <div class="number-help">ENTER RESERVE · CTRL+ENTER PLAY · BACKSPACE CLEAR</div>
+        <small id="roomHint">Type a song number or press F1 to search</small>
       </div>
 
       <div class="edge-actions" aria-label="Primary controls">
@@ -51,25 +164,47 @@
       </div>
 
       <div class="library-ticker">
-        <span class="ticker-index">MEDIA</span>
+        <span class="ticker-index">SMART</span>
         <div class="ticker-copy">
-          <strong id="tickerPrimary">Point OpenKRK at your karaoke media folder.</strong>
-          <span id="tickerSecondary">MID / MIDI / KAR and BGV videos may live together in the same folder tree.</span>
+          <strong id="tickerPrimary">OpenKRK is reading your local karaoke library.</strong>
+          <span id="tickerSecondary">New songs are detected from first-seen time and file modification time.</span>
         </div>
       </div>
     </section>
 
     <section id="playerSurface" class="player-surface" aria-hidden="true">
       <div class="now-strip">
-        <span class="now-state">NOW</span>
+        <span class="now-state">현재곡</span>
         <b id="nowCode">00000</b>
         <strong id="nowTitle">Untitled</strong>
         <span id="nowArtist">Unknown Artist</span>
       </div>
 
+      <div id="songIntroCard" class="song-intro-card">
+        <div class="song-cover-frame">
+          <img id="songCover" alt="" />
+          <div id="songCoverFallback" class="song-cover-fallback"><span>OPEN</span><b>KRK</b></div>
+        </div>
+        <div class="song-intro-copy">
+          <div class="song-intro-kicker">NOW PLAYING / TRACK INFO</div>
+          <h2 id="metaTitle">Untitled</h2>
+          <div class="song-intro-keyrow"><span>현재음정 <b id="metaCurrentKey">—</b></span><span>원음정 <b id="metaOriginalKey">—</b></span></div>
+          <dl>
+            <div><dt>노래 / ARTIST</dt><dd id="metaArtist">Unknown Artist</dd></div>
+            <div><dt>앨범 / ALBUM</dt><dd id="metaAlbum">Metadata loading…</dd></div>
+            <div><dt>작곡 / CREDITS</dt><dd id="metaCredits">MusicBrainz lookup</dd></div>
+          </dl>
+        </div>
+        <div class="song-intro-side">
+          <span id="metaReleaseDate">LOCAL MIDI</span>
+          <b>OPENKRK</b>
+        </div>
+      </div>
+
       <div class="lyric-zone">
         <div id="lyricPrev" class="lyric lyric-prev"></div>
         <div id="lyricCurrent" class="lyric lyric-current">♪</div>
+        <div id="lyricRomanized" class="lyric lyric-romanized"></div>
         <div id="lyricNext" class="lyric lyric-next"></div>
       </div>
 
@@ -105,7 +240,7 @@
           <button data-action="visual-all">USE ALL</button>
           <button data-action="visual-source">CHANGE SOURCE</button>
         </div>
-        <div class="visual-note">Folder names become categories automatically. Videos inside the media root can stay mixed with your MID/KAR files.</div>
+        <div class="visual-note">Folder names become categories automatically. Videos inside the media root can stay mixed with MID/KAR files.</div>
       </div>
       <div class="panel-sidecopy">F3 / BGV DIRECTOR</div>
     </section>
@@ -155,6 +290,11 @@
               <option value="custom">Custom file</option>
             </select>
             <button class="inline-action" data-action="lyric-font-file">CHOOSE FONT FILE</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="romanizedEnabled">SECONDARY / ROMANIZED LYRIC</label>
+            <select id="romanizedEnabled"><option value="on">Auto when embedded</option><option value="off">Off</option></select>
           </div>
 
           <div class="setting-block">
