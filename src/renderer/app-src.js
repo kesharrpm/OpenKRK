@@ -43,23 +43,25 @@ const songCover = $('songCover');
 const songCoverFallback = $('songCoverFallback');
 
 const FONT_STACKS = {
-  condensed: '"Bahnschrift SemiCondensed", "Arial Narrow", sans-serif',
-  system: '"Segoe UI Variable", "Segoe UI", sans-serif',
-  rounded: '"Arial Rounded MT Bold", "Trebuchet MS", sans-serif',
-  mono: '"Cascadia Mono", "Consolas", monospace',
-  serif: 'Georgia, "Times New Roman", serif'
+  system: '"Segoe UI Variable", "Segoe UI", "Arial", sans-serif',
+  karaoke: '"Arial Rounded MT Bold", "Arial Black", "Malgun Gothic", "Segoe UI", sans-serif',
+  clean: '"Aptos", "Segoe UI Variable", "Segoe UI", sans-serif',
+  condensed: '"Arial Narrow", "Bahnschrift SemiCondensed", "Segoe UI", sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  mono: '"Cascadia Mono", "Consolas", monospace'
 };
 
 const DEFAULT_PREFS = {
   uiScale: 100,
   lyricScale: 100,
-  systemFont: 'condensed',
-  lyricFont: 'condensed',
+  systemFont: 'system',
+  lyricFont: 'karaoke',
   systemFontPath: '',
   lyricFontPath: '',
   sfxEnabled: true,
   sfxVolume: 45,
-  romanizedEnabled: true
+  romanizedEnabled: true,
+  lyricDelayMs: 0
 };
 
 let prefs = loadPrefs();
@@ -86,6 +88,22 @@ function loadPrefs() {
   catch { return { ...DEFAULT_PREFS }; }
 }
 function savePrefs() { localStorage.setItem('openkrk-ui-prefs', JSON.stringify(prefs)); }
+function cleanSongTitle(value = '') {
+  return String(value).replace(/\.(xtsp|hmc|enc|pack)$/i, '').trim();
+}
+function formatLyricDelay(value) {
+  const ms = Number(value) || 0;
+  const seconds = ms / 1000;
+  return (seconds >= 0 ? '+' : '') + seconds.toFixed(2) + 's';
+}
+function setLyricDelay(value, announce = false) {
+  prefs.lyricDelayMs = Math.max(-5000, Math.min(5000, Math.round(Number(value) || 0)));
+  savePrefs();
+  if ($('lyricDelay')) $('lyricDelay').value = prefs.lyricDelayMs;
+  if ($('lyricDelayValue')) $('lyricDelayValue').textContent = formatLyricDelay(prefs.lyricDelayMs);
+  if ($('lyricDelayHud')) $('lyricDelayHud').textContent = 'LYRIC ' + formatLyricDelay(prefs.lyricDelayMs);
+  if (announce) showToast('LYRIC DELAY · ' + formatLyricDelay(prefs.lyricDelayMs));
+}
 function localFileUrl(filePath) {
   const normalized = String(filePath || '').replace(/\\/g, '/');
   return encodeURI(normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`);
@@ -101,8 +119,8 @@ function installCustomFont(slot, filePath) {
 function applyPrefs() {
   document.documentElement.style.setProperty('--ui-scale', String((Number(prefs.uiScale) || 100) / 100));
   document.documentElement.style.setProperty('--lyric-scale', String((Number(prefs.lyricScale) || 100) / 100));
-  const systemStack = prefs.systemFont === 'custom' && prefs.systemFontPath ? installCustomFont('system', prefs.systemFontPath) : FONT_STACKS[prefs.systemFont] || FONT_STACKS.condensed;
-  const lyricStack = prefs.lyricFont === 'custom' && prefs.lyricFontPath ? installCustomFont('lyric', prefs.lyricFontPath) : FONT_STACKS[prefs.lyricFont] || FONT_STACKS.condensed;
+  const systemStack = prefs.systemFont === 'custom' && prefs.systemFontPath ? installCustomFont('system', prefs.systemFontPath) : FONT_STACKS[prefs.systemFont] || FONT_STACKS.system;
+  const lyricStack = prefs.lyricFont === 'custom' && prefs.lyricFontPath ? installCustomFont('lyric', prefs.lyricFontPath) : FONT_STACKS[prefs.lyricFont] || FONT_STACKS.karaoke;
   document.documentElement.style.setProperty('--ui', systemStack);
   document.documentElement.style.setProperty('--display', systemStack);
   document.documentElement.style.setProperty('--lyric-font', lyricStack);
@@ -116,6 +134,8 @@ function applyPrefs() {
   $('romanizedEnabled').value = prefs.romanizedEnabled ? 'on' : 'off';
   $('sfxVolume').value = prefs.sfxVolume;
   $('sfxVolumeValue').textContent = `${prefs.sfxVolume}%`;
+  $('lyricDelay').value = Number(prefs.lyricDelayMs) || 0;
+  $('lyricDelayValue').textContent = formatLyricDelay(prefs.lyricDelayMs);
 }
 
 class InterfaceSfx {
@@ -170,6 +190,7 @@ class MidiEngine {
     this.soundBankPath = '';
     this.loadedBankPath = '';
     this.pendingReady = null;
+    this.pendingReject = null;
   }
   async ensureCore() {
     if (this.context && this.synth && this.sequencer) {
@@ -183,8 +204,21 @@ class MidiEngine {
     this.synth.connect(this.context.destination);
     await this.synth.isReady;
     this.sequencer = new Sequencer(this.synth, { skipToFirstNoteOn: false });
-    this.sequencer.eventHandler.addEvent('songChange', 'openkrk-song-ready', () => {
-      if (this.pendingReady) { const resolve = this.pendingReady; this.pendingReady = null; resolve(); }
+    this.sequencer.eventHandler.addEvent('songChange', 'openkrk-song-ready', midiData => {
+      if (this.pendingReady) {
+        const resolve = this.pendingReady;
+        this.pendingReady = null;
+        this.pendingReject = null;
+        resolve(midiData);
+      }
+    });
+    this.sequencer.eventHandler.addEvent('midiError', 'openkrk-midi-error', error => {
+      if (this.pendingReject) {
+        const reject = this.pendingReject;
+        this.pendingReady = null;
+        this.pendingReject = null;
+        reject(error instanceof Error ? error : new Error(String(error?.message || error || 'MIDI parse error')));
+      }
     });
     await this.context.resume();
   }
@@ -194,7 +228,7 @@ class MidiEngine {
     try { this.synth?.stopAll(true); } catch {}
     try { await this.synth?.destroy?.(); } catch {}
     try { await this.context?.close?.(); } catch {}
-    this.context = null; this.synth = null; this.sequencer = null; this.loadedBankPath = ''; this.pendingReady = null;
+    this.context = null; this.synth = null; this.sequencer = null; this.loadedBankPath = ''; this.pendingReady = null; this.pendingReject = null;
   }
   async ensureSoundBank() {
     if (!this.soundBankPath) throw new Error('Choose an SF2, SF3, SFOGG or DLS file in F4 System first.');
@@ -211,11 +245,18 @@ class MidiEngine {
     const binary = toArrayBuffer(raw);
     this.sequencer.pause();
     this.synth.stopAll(true);
-    const ready = new Promise(resolve => {
+    const ready = new Promise((resolve, reject) => {
       this.pendingReady = resolve;
-      setTimeout(() => { if (this.pendingReady === resolve) { this.pendingReady = null; resolve(); } }, 2500);
+      this.pendingReject = reject;
+      setTimeout(() => {
+        if (this.pendingReady === resolve) {
+          this.pendingReady = null;
+          this.pendingReject = null;
+          reject(new Error('MIDI did not finish loading. Check the file format or SoundFont.'));
+        }
+      }, 12000);
     });
-    this.sequencer.loadNewSongList([{ binary, fileName: song.title || 'OpenKRK Song' }]);
+    this.sequencer.loadNewSongList([{ binary, fileName: cleanSongTitle(song.title) || 'OpenKRK Song' }]);
     await ready;
     this.sequencer.currentTime = 0;
     this.sequencer.play();
@@ -591,7 +632,7 @@ async function renderLatestSongs(force = false) {
 
     const title = document.createElement('strong');
     title.className = 'new-song-title';
-    title.textContent = song.title || 'Untitled';
+    title.textContent = cleanSongTitle(song.title || 'Untitled');
 
     const artist = document.createElement('span');
     artist.className = 'new-song-artist';
@@ -696,7 +737,7 @@ async function bootstrapRoom() {
 }
 
 function renderMetadataCard(song, metadata = null) {
-  $('metaTitle').textContent = metadata?.title || song?.title || 'Untitled';
+  $('metaTitle').textContent = cleanSongTitle(metadata?.title || song?.title || 'Untitled');
   $('metaArtist').textContent = metadata?.artist || song?.artist || 'Unknown Artist';
   $('metaAlbum').textContent = metadata?.album || 'Local MIDI / album not matched';
   const credits = Array.isArray(metadata?.composers) ? metadata.composers.map(item => item.name + (item.role ? ' · ' + item.role : '')).join(' / ') : '';
@@ -753,7 +794,7 @@ function renderSearchResults(rows, query) {
     const row = document.createElement('div'); row.className = 'search-row'; row.tabIndex = 0;
     const code = document.createElement('span'); code.className = 'search-row-code'; code.textContent = song.code || '—'; if (song.generatedCode) code.dataset.local = 'true';
     const copy = document.createElement('div'); copy.className = 'search-row-copy';
-    const title = document.createElement('strong'); title.textContent = song.title || 'Untitled';
+    const title = document.createElement('strong'); title.textContent = cleanSongTitle(song.title || 'Untitled');
     const artist = document.createElement('span'); artist.textContent = song.artist || 'Unknown Artist'; copy.append(title, artist);
     const ext = document.createElement('span'); ext.className = 'search-row-ext'; ext.textContent = String(song.ext || '').replace('.', '').toUpperCase();
     const accept = () => { codeBuffer = String(song.code || ''); renderCode(); returnToRoom(); showToast(`${song.code} · ${song.title}`); sfx.confirm(); };
@@ -810,7 +851,8 @@ function startTransportLoop() {
       $('remaining').textContent = `-${formatTime(Math.max(0, state.duration - state.currentTime))}`;
       $('progressFill').style.width = `${state.duration > 0 ? Math.min(100, (state.currentTime / state.duration) * 100) : 0}%`;
       $('playState').textContent = state.paused ? 'PAUSE' : 'PLAY';
-      updateLyrics(state.currentTime);
+      const lyricTime = Math.max(0, state.currentTime - ((Number(prefs.lyricDelayMs) || 0) / 1000));
+      updateLyrics(lyricTime);
       if (state.finished && state.duration > 0) { stopCurrentSong(false); return; }
     }
     transportRaf = requestAnimationFrame(tick);
@@ -822,7 +864,8 @@ async function playResolvedSong(song) {
   if (!midiEngine.soundBankPath) { openSystem(); showToast('Choose a SoundFont / DLS in F4 before playing MIDI'); sfx.error(); return; }
   try {
     currentSong = song;
-    $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = song.title || 'Untitled'; $('nowArtist').textContent = song.artist || 'Unknown Artist'; idleCurrentCode.textContent = song.code || '—'; idleCurrentTitle.textContent = (song.title || 'Untitled') + ' - ' + (song.artist || 'Unknown Artist');
+    const displayTitle = cleanSongTitle(song.title || 'Untitled');
+    $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = displayTitle; $('nowArtist').textContent = song.artist || 'Unknown Artist'; idleCurrentCode.textContent = song.code || '—'; idleCurrentTitle.textContent = displayTitle + ' · ' + (song.artist || 'Unknown Artist');
     $('lyricCurrent').textContent = 'LOADING MIDI…'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
     setMode('player');
     revealSongIntro(song);
@@ -830,7 +873,7 @@ async function playResolvedSong(song) {
     currentLyrics = parseMidiLyrics(binary);
     currentLyricLine = -1;
     if (!currentLyrics.length) $('lyricCurrent').textContent = '♪';
-    showToast(`PLAYING · ${song.title}`); sfx.confirm(); startTransportLoop();
+    showToast(`PLAYING · ${cleanSongTitle(song.title)}`); sfx.confirm(); startTransportLoop();
   } catch (error) {
     console.error(error); currentSong = null; currentLyrics = []; setMode('idle'); showToast(`MIDI ERROR · ${error.message || error}`, 5200); sfx.error();
   }
@@ -879,6 +922,7 @@ async function chooseCustomFont(slot) {
 searchInput.addEventListener('input', () => { clearTimeout(searchTimer); const value = searchInput.value; searchTimer = setTimeout(() => performSearch(value), 90); });
 $('uiScale').addEventListener('input', event => { prefs.uiScale = Number(event.target.value); savePrefs(); applyPrefs(); });
 $('lyricScale').addEventListener('input', event => { prefs.lyricScale = Number(event.target.value); savePrefs(); applyPrefs(); });
+$('lyricDelay').addEventListener('input', event => { setLyricDelay(event.target.value, false); });
 $('systemFont').addEventListener('change', event => { prefs.systemFont = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
 $('lyricFont').addEventListener('change', event => { prefs.lyricFont = event.target.value; savePrefs(); applyPrefs(); sfx.move(); });
 $('sfxEnabled').addEventListener('change', event => { prefs.sfxEnabled = event.target.value === 'on'; savePrefs(); if (prefs.sfxEnabled) sfx.confirm(); });
@@ -933,6 +977,9 @@ document.addEventListener('keydown', async event => {
   if (event.key === 'Backspace') { event.preventDefault(); codeBuffer = codeBuffer.slice(0, -1); renderCode(); sfx.move(); return; }
   if (event.key === 'Escape') { event.preventDefault(); if (currentSong) stopCurrentSong(); else { clearCode(); sfx.back(); } return; }
   if (event.key === ' ') { if (currentSong) { event.preventDefault(); const paused = midiEngine.togglePause(); showToast(paused ? 'PAUSED' : 'RESUMED'); sfx.move(); } return; }
+  if (currentSong && event.key === '[') { event.preventDefault(); setLyricDelay((Number(prefs.lyricDelayMs) || 0) - 100, true); return; }
+  if (currentSong && event.key === ']') { event.preventDefault(); setLyricDelay((Number(prefs.lyricDelayMs) || 0) + 100, true); return; }
+  if (currentSong && event.key === '\\') { event.preventDefault(); setLyricDelay(0, true); return; }
   if (event.key === 'Enter') { event.preventDefault(); await reserveCode(true); return; }
   if (event.key === 'F1') { event.preventDefault(); openSearch(); return; }
   if (event.key === 'F2') { event.preventDefault(); await chooseLibraryFolder(); return; }
@@ -942,6 +989,7 @@ document.addEventListener('keydown', async event => {
 });
 
 applyPrefs();
+setLyricDelay(prefs.lyricDelayMs, false);
 renderCode();
 bootstrapRoom().catch(error => {
   console.error(error);
