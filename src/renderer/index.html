@@ -7,111 +7,68 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main id="stage" class="stage mode-idle startup-active">
+  <main id="stage" class="stage mode-idle" data-theme="dark">
     <video id="bgv" class="bgv" muted autoplay playsinline></video>
     <div class="bg-fallback" aria-hidden="true"></div>
-    <div class="scanlines" aria-hidden="true"></div>
-    <div class="vignette" aria-hidden="true"></div>
+    <div class="stage-shade" aria-hidden="true"></div>
 
     <section id="bootSurface" class="startup-layer boot-surface" aria-label="Loading songs">
-      <div class="boot-poster" aria-hidden="true">
-        <svg viewBox="0 0 1080 720" role="img">
-          <defs>
-            <linearGradient id="bp0" x1="0" x2="1">
-              <stop offset="0" stop-color="#2ed4d0"/>
-              <stop offset=".44" stop-color="#86eff1"/>
-              <stop offset="1" stop-color="#ff9ac2"/>
-            </linearGradient>
-            <linearGradient id="bp1" x1=".2" y1="0" x2=".8" y2="1">
-              <stop offset="0" stop-color="#ffca37"/>
-              <stop offset="1" stop-color="#ff4f75"/>
-            </linearGradient>
-            <filter id="blur"><feGaussianBlur stdDeviation="30"/></filter>
-          </defs>
-          <rect width="1080" height="720" fill="url(#bp0)"/>
-          <circle cx="815" cy="132" r="210" fill="#22b7c6" opacity=".8"/>
-          <circle cx="195" cy="620" r="260" fill="#ff932d" opacity=".88"/>
-          <path d="M535 34 C690 80 798 237 742 396 C699 517 567 610 402 603 C480 517 477 399 424 319 C370 237 385 112 535 34Z" fill="url(#bp1)" opacity=".9"/>
-          <path d="M-40 400 C205 303 351 340 513 508 C608 607 760 633 1120 522 L1120 760 L-40 760Z" fill="#061927" opacity=".35"/>
-          <g fill="#fff" opacity=".18" filter="url(#blur)">
-            <circle cx="190" cy="170" r="78"/><circle cx="905" cy="512" r="96"/><circle cx="540" cy="350" r="130"/>
-          </g>
-          <g fill="none" stroke="#fff" opacity=".55">
-            <circle cx="915" cy="170" r="58" stroke-width="6"/>
-            <circle cx="915" cy="170" r="34" stroke-width="2"/>
-            <path d="M43 124H340M43 145H248M822 626H1040" stroke-width="2"/>
-          </g>
-        </svg>
-        <div class="boot-poster-wordmark">
-          <span>OPENKRK</span>
-          <b>ROOM PLAYER</b>
-        </div>
+      <div class="boot-art" aria-hidden="true">
+        <div class="boot-orb orb-a"></div>
+        <div class="boot-orb orb-b"></div>
+        <div class="boot-wordmark"><b>OPENKRK</b><span>KARAOKE ROOM</span></div>
       </div>
       <div class="boot-readout">
-        <div class="boot-readout-box">
-          <strong>SONGS LOADING<span class="loading-dots">....</span></strong>
-          <small id="bootDetail">Starting local media engine</small>
-        </div>
+        <strong>SONGS LOADING<span class="loading-dots">....</span></strong>
+        <small id="bootDetail">Starting media engine</small>
         <div class="boot-progress"><i id="bootProgress"></i></div>
       </div>
-      <div class="boot-build">HTML STAGE / SPESSASYNTH MIDI ENGINE / LOCAL-FIRST</div>
     </section>
 
     <section id="setupSurface" class="setup-surface startup-layer" aria-hidden="true">
       <div class="setup-card">
-        <div class="setup-kicker">FIRST RUN / MEDIA SETUP</div>
-        <h1>Connect your karaoke library.</h1>
-        <p>OpenKRK keeps the songs local. Choose where your MIDI/KAR files live, then point it at your BGV folder. The folders may also be the same folder.</p>
-
+        <div class="setup-kicker">ROOM SETUP</div>
+        <h1>Connect your karaoke library</h1>
+        <p>Choose your songs, background videos, and MIDI sound bank. You can change all three later from System.</p>
         <div class="setup-grid">
           <button class="setup-source" data-action="setup-songs">
-            <span class="setup-step">01</span>
-            <strong>SONGS</strong>
+            <span>01</span><strong>SONGS</strong>
             <small id="setupSongPath">Choose MID / MIDI / KAR folder</small>
             <b id="setupSongCount">NOT CONNECTED</b>
           </button>
           <button class="setup-source" data-action="setup-bgvs">
-            <span class="setup-step">02</span>
-            <strong>BGV</strong>
-            <small id="setupBgvPath">Choose video folder or reuse songs folder</small>
+            <span>02</span><strong>BGV</strong>
+            <small id="setupBgvPath">Choose video folder</small>
             <b id="setupBgvCount">OPTIONAL</b>
           </button>
           <button class="setup-source" data-action="setup-bank">
-            <span class="setup-step">03</span>
-            <strong>SOUNDBANK</strong>
-            <small id="setupBankPath">Choose SF2 / SF3 / DLS for MIDI playback</small>
+            <span>03</span><strong>SOUNDBANK</strong>
+            <small id="setupBankPath">Choose SF2 / SF3 / DLS</small>
             <b id="setupBankState">REQUIRED TO PLAY</b>
           </button>
         </div>
-
         <div class="setup-foot">
           <span id="setupHint">Add a songs folder to continue.</span>
           <button id="setupContinue" data-action="setup-continue" disabled>ENTER ROOM</button>
         </div>
       </div>
-      <div class="setup-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
     </section>
 
     <section id="introSurface" class="intro-surface startup-layer" aria-hidden="true">
       <div class="intro-lockup">
-        <small>OPENKRK ROOM SYSTEM</small>
-        <strong>VISUAL CHANNEL READY</strong>
-        <span id="introVisualName">BGV PREVIEW</span>
+        <small>OPENKRK</small>
+        <strong>READY</strong>
+        <span id="introVisualName">BGV</span>
       </div>
       <div class="intro-countdown"><i id="introCountdown"></i></div>
     </section>
 
     <header class="machine-head">
-      <div class="classic-current">
+      <div class="current-song">
         <span class="current-label">현재곡</span>
         <span class="current-note">♪</span>
         <strong id="idleCurrentCode">00000</strong>
-        <span id="idleCurrentTitle">OPENKRK ROOM</span>
-      </div>
-      <div class="classic-status">
-        <span id="libraryStatus">NO LIBRARY</span>
-        <span id="bgvStatus">BGV OFF</span>
-        <span id="audioStatus">NO SOUNDBANK</span>
+        <span id="idleCurrentTitle">OPENKRK</span>
       </div>
     </header>
 
@@ -124,43 +81,31 @@
 
       <section id="newSongsDeck" class="new-songs-deck" aria-label="New songs">
         <div class="new-songs-banner">
-          <div class="new-ribbon-mark">NEW</div>
-          <div class="new-songs-title">
-            <small>신곡 안내 · OPENKRK</small>
+          <div>
+            <small>GLOBAL DISCOVERY</small>
             <strong>NEW SONGS</strong>
-            <span id="newSongsSource">CHECKING ONLINE CATALOG…</span>
+            <span id="newSongsSource">UPDATING…</span>
           </div>
-          <button class="new-refresh" data-action="refresh-new-songs">↻ UPDATE</button>
+          <button class="new-refresh" data-action="refresh-new-songs" title="Refresh new songs">↻</button>
         </div>
         <div class="new-songs-head">
-          <span>NO.</span><span>TITLE</span><span>ARTIST</span><span>RELEASE</span>
+          <span></span><span>NO.</span><span>SONG</span><span>ARTIST</span>
         </div>
         <div id="newSongsList" class="new-songs-list">
-          <div class="new-song-empty">Waiting for local song index…</div>
+          <div class="new-song-empty">Finding recent songs in your library…</div>
         </div>
       </section>
 
-      <div class="room-caption">
-        <span class="room-caption-label">ROOM STATUS</span>
-        <strong id="roomState">READY</strong>
-        <small id="roomHint">Type a song number or press F1 to search</small>
-      </div>
+      <nav class="edge-actions" aria-label="Room controls">
+        <button data-action="search"><kbd>F1</kbd><span>Search</span></button>
+        <button data-action="visuals"><kbd>F3</kbd><span>Visuals</span></button>
+        <button data-action="system"><kbd>F4</kbd><span>System</span></button>
+      </nav>
 
-      <div class="edge-actions" aria-label="Primary controls">
-        <button data-action="search"><kbd>F1</kbd><span>SEARCH</span></button>
-        <button data-action="library"><kbd>F2</kbd><span>MEDIA</span></button>
-        <button data-action="visuals"><kbd>F3</kbd><span>VISUALS</span></button>
-        <button data-action="system"><kbd>F4</kbd><span>SYSTEM</span></button>
-        <button data-action="queue"><kbd>Q</kbd><span>QUEUE</span></button>
-        <button data-action="fullscreen"><kbd>F11</kbd><span>FULLSCREEN</span></button>
-      </div>
-
-      <div class="library-ticker">
-        <span class="ticker-index">INFO</span>
-        <div class="ticker-copy">
-          <strong id="tickerPrimary">Checking online music catalogs for songs you actually have.</strong>
-          <span id="tickerSecondary">Only API matches that exist in your MIDI folder appear in NEW SONGS.</span>
-        </div>
+      <div class="internal-status" aria-hidden="true">
+        <span id="libraryStatus"></span><span id="bgvStatus"></span><span id="audioStatus"></span>
+        <span id="roomState"></span><span id="roomHint"></span>
+        <span id="tickerPrimary"></span><span id="tickerSecondary"></span>
       </div>
     </section>
 
@@ -175,21 +120,17 @@
       <div id="songIntroCard" class="song-intro-card">
         <div class="song-cover-frame">
           <img id="songCover" alt="" />
-          <div id="songCoverFallback" class="song-cover-fallback"><span>OPEN</span><b>KRK</b></div>
+          <div id="songCoverFallback" class="song-cover-fallback"><b>♪</b></div>
         </div>
         <div class="song-intro-copy">
-          <div class="song-intro-kicker">NOW PLAYING / TRACK INFO</div>
+          <small>NOW PLAYING</small>
           <h2 id="metaTitle">Untitled</h2>
-          <div class="song-intro-keyrow"><span>현재음정 <b id="metaCurrentKey">—</b></span><span>원음정 <b id="metaOriginalKey">—</b></span></div>
-          <dl>
-            <div><dt>노래 / ARTIST</dt><dd id="metaArtist">Unknown Artist</dd></div>
-            <div><dt>앨범 / ALBUM</dt><dd id="metaAlbum">Metadata loading…</dd></div>
-            <div><dt>작곡 / CREDITS</dt><dd id="metaCredits">MusicBrainz lookup</dd></div>
-          </dl>
-        </div>
-        <div class="song-intro-side">
-          <span id="metaReleaseDate">LOCAL MIDI</span>
-          <b>OPENKRK</b>
+          <strong id="metaArtist">Unknown Artist</strong>
+          <span id="metaAlbum"></span>
+          <span id="metaCredits" class="metadata-hidden"></span>
+          <span id="metaReleaseDate" class="metadata-hidden"></span>
+          <span id="metaCurrentKey" class="metadata-hidden">—</span>
+          <span id="metaOriginalKey" class="metadata-hidden">—</span>
         </div>
       </div>
 
@@ -206,71 +147,91 @@
         <span id="remaining">-0:00</span>
         <div class="transport-state">
           <span id="playState">PLAY</span>
-          <span>KEY <b id="keyValue">0</b></span>
-          <span>TEMPO <b id="tempoValue">100%</b></span>
-          <span id="lyricDelayHud">LYRIC +0.00s</span>
+          <span id="lyricDelayHud">SYNC +0.00s</span>
+          <span class="metadata-hidden">KEY <b id="keyValue">0</b></span>
+          <span class="metadata-hidden">TEMPO <b id="tempoValue">100%</b></span>
         </div>
       </div>
     </section>
 
-    <section id="searchSurface" class="search-surface panel-surface" aria-hidden="true">
-      <div class="search-panel">
-        <div class="panel-title"><span>FIND A SONG</span><button data-action="close-panel">ESC CLOSE</button></div>
-        <input id="searchInput" autocomplete="off" spellcheck="false" placeholder="Title, artist, or number" />
+    <section id="searchSurface" class="panel-surface search-surface" aria-hidden="true">
+      <div class="modal-panel search-panel">
+        <div class="panel-title"><strong>Search songs</strong><button data-action="close-panel">ESC</button></div>
+        <input id="searchInput" autocomplete="off" spellcheck="false" placeholder="Title, artist, or song number" />
         <div id="searchMeta" class="search-meta">INDEXED LIBRARY</div>
         <div id="searchResults" class="search-results"></div>
       </div>
-      <div class="panel-sidecopy">OPENKRK / LOCAL SONGBOOK</div>
     </section>
 
-    <section id="visualSurface" class="visual-surface panel-surface" aria-hidden="true">
-      <div class="visual-panel">
-        <div class="panel-title"><span>VISUAL CONTROL</span><button data-action="close-panel">ESC CLOSE</button></div>
+    <section id="visualSurface" class="panel-surface visual-surface" aria-hidden="true">
+      <div class="modal-panel visual-panel">
+        <div class="panel-title"><strong>Background video</strong><button data-action="close-panel">ESC</button></div>
         <div class="visual-summary"><strong id="visualNowCategory">ALL VISUALS</strong><span id="visualNowName">Random rotation</span></div>
         <div id="visualCategories" class="visual-categories"></div>
         <div class="visual-actions">
-          <button data-action="visual-random">RANDOM NEXT</button>
-          <button data-action="visual-all">USE ALL</button>
-          <button data-action="visual-source">CHANGE SOURCE</button>
+          <button data-action="visual-random">Random next</button>
+          <button data-action="visual-all">Use all</button>
+          <button data-action="visual-source">Change folder</button>
         </div>
-        <div class="visual-note">Folder names become categories automatically. Videos inside the media root can stay mixed with MID/KAR files.</div>
       </div>
-      <div class="panel-sidecopy">F3 / BGV DIRECTOR</div>
     </section>
 
-    <section id="systemSurface" class="system-surface panel-surface" aria-hidden="true">
-      <div class="system-panel">
-        <div class="panel-title"><span>SYSTEM / ROOM SETUP</span><button data-action="close-panel">ESC CLOSE</button></div>
+    <section id="systemSurface" class="panel-surface system-surface" aria-hidden="true">
+      <div class="modal-panel system-panel">
+        <div class="panel-title"><strong>System</strong><button data-action="close-panel">ESC</button></div>
 
         <div class="settings-grid">
           <div class="setting-block setting-wide">
             <label>SOUNDBANK</label>
             <strong id="soundBankName">Not selected</strong>
-            <button class="inline-action" data-action="soundbank">CHOOSE SF2 / SF3 / DLS</button>
+            <button class="inline-action" data-action="soundbank">Choose soundbank</button>
           </div>
 
           <div class="setting-block">
-            <label for="uiScale">SYSTEM UI SIZE <span id="uiScaleValue">100%</span></label>
-            <input id="uiScale" type="range" min="78" max="130" step="1" value="100" />
+            <label>SONGS</label>
+            <button class="inline-action" data-action="library">Change / rescan song folder</button>
+          </div>
+
+          <div class="setting-block">
+            <label>BGV</label>
+            <button class="inline-action" data-action="visual-source">Change video folder</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="themeMode">THEME</label>
+            <select id="themeMode">
+              <option value="dark">Dark</option>
+              <option value="auto">Follow system</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+
+          <div class="setting-block">
+            <label for="uiScale">INTERFACE SCALE <span id="uiScaleValue">100%</span></label>
+            <input id="uiScale" type="range" min="80" max="125" step="1" value="100" />
           </div>
 
           <div class="setting-block">
             <label for="lyricScale">LYRIC SIZE <span id="lyricScaleValue">100%</span></label>
-            <input id="lyricScale" type="range" min="75" max="140" step="1" value="100" />
+            <input id="lyricScale" type="range" min="75" max="135" step="1" value="100" />
           </div>
 
           <div class="setting-block">
-            <label for="systemFont">SYSTEM FONT</label>
+            <label for="lyricDelay">LYRIC SYNC <span id="lyricDelayValue">+0.00s</span></label>
+            <input id="lyricDelay" type="range" min="-5000" max="5000" step="50" value="0" />
+            <small>[ earlier · ] later · \ reset</small>
+          </div>
+
+          <div class="setting-block">
+            <label for="systemFont">INTERFACE FONT</label>
             <select id="systemFont">
               <option value="system">Segoe UI</option>
               <option value="clean">Clean / Aptos</option>
               <option value="condensed">Condensed</option>
-              <option value="karaoke">Karaoke Heavy</option>
-              <option value="serif">Serif</option>
-              <option value="mono">Mono</option>
-              <option value="custom">Custom file</option>
+              <option value="karaoke">Heavy</option>
+              <option value="custom">Custom</option>
             </select>
-            <button class="inline-action" data-action="system-font-file">CHOOSE FONT FILE</button>
+            <button class="inline-action subtle" data-action="system-font-file">Choose file</button>
           </div>
 
           <div class="setting-block">
@@ -281,21 +242,14 @@
               <option value="clean">Clean / Aptos</option>
               <option value="condensed">Condensed</option>
               <option value="serif">Serif</option>
-              <option value="mono">Mono</option>
-              <option value="custom">Custom file</option>
+              <option value="custom">Custom</option>
             </select>
-            <button class="inline-action" data-action="lyric-font-file">CHOOSE FONT FILE</button>
+            <button class="inline-action subtle" data-action="lyric-font-file">Choose file</button>
           </div>
 
           <div class="setting-block">
-            <label for="lyricDelay">LYRIC SYNC / DELAY <span id="lyricDelayValue">+0.00s</span></label>
-            <input id="lyricDelay" type="range" min="-5000" max="5000" step="50" value="0" />
-            <small class="setting-help">Positive = lyrics later · [ / ] changes 0.10s while singing · \ resets</small>
-          </div>
-
-          <div class="setting-block">
-            <label for="romanizedEnabled">SECONDARY / ROMANIZED LYRIC</label>
-            <select id="romanizedEnabled"><option value="on">Auto when embedded</option><option value="off">Off</option></select>
+            <label for="romanizedEnabled">SECONDARY LYRIC</label>
+            <select id="romanizedEnabled"><option value="on">Auto</option><option value="off">Off</option></select>
           </div>
 
           <div class="setting-block">
@@ -304,14 +258,11 @@
           </div>
 
           <div class="setting-block">
-            <label for="sfxVolume">SFX LEVEL <span id="sfxVolumeValue">45%</span></label>
+            <label for="sfxVolume">SFX VOLUME <span id="sfxVolumeValue">45%</span></label>
             <input id="sfxVolume" type="range" min="0" max="100" step="1" value="45" />
           </div>
         </div>
-
-        <div class="system-hint">SPACE pause/resume · [ / ] lyric sync ±0.10s · \ reset lyric sync · ESC stop · F1 search · F2 media · F3 visuals · F4 system</div>
       </div>
-      <div class="panel-sidecopy">F4 / MACHINE SETUP</div>
     </section>
 
     <div id="toast" class="toast" role="status"></div>
