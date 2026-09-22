@@ -37,6 +37,12 @@ function normalize(value = '') {
   return String(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 function canonicalPath(filePath) { return path.resolve(String(filePath || '')).toLowerCase(); }
+function cleanTransportSuffix(value = '') {
+  return String(value)
+    .replace(/\.(xtsp|hmc|enc|pack)$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 async function hydrateSongFreshness(files, previousSongs = []) {
   const previousByPath = new Map(previousSongs.filter(Boolean).map(song => [canonicalPath(song.path), song]));
@@ -278,11 +284,13 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
 
 async function resolveSongMetadata(song) {
   if (!song?.title) return null;
-  const cacheKey = normalize(String(song.title) + '|' + String(song.artist || ''));
+  const cleanTitle = cleanTransportSuffix(song.title);
+  const cleanArtist = cleanTransportSuffix(song.artist || '');
+  const cacheKey = normalize(cleanTitle + '|' + cleanArtist);
   if (metadataCache[cacheKey]) return metadataCache[cacheKey];
 
-  const queryParts = ['recording:"' + escapeMbQuery(song.title) + '"'];
-  if (song.artist && song.artist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(song.artist) + '"');
+  const queryParts = ['recording:"' + escapeMbQuery(cleanTitle) + '"'];
+  if (cleanArtist && cleanArtist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(cleanArtist) + '"');
   const searchUrl = new URL('https://musicbrainz.org/ws/2/recording/');
   searchUrl.searchParams.set('query', queryParts.join(' AND '));
   searchUrl.searchParams.set('fmt', 'json');
@@ -291,7 +299,7 @@ async function resolveSongMetadata(song) {
   const search = await musicBrainzJson(searchUrl);
   const recording = (search.recordings || [])[0];
   if (!recording) {
-    const empty = { source: 'MusicBrainz', matched: false, title: song.title, artist: song.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] };
+    const empty = { source: 'MusicBrainz', matched: false, title: cleanTitle || song.title, artist: cleanArtist || song.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] };
     metadataCache[cacheKey] = empty;
     writeJson(metadataCacheFile(), metadataCache);
     return empty;
@@ -326,8 +334,8 @@ async function resolveSongMetadata(song) {
     source: 'MusicBrainz',
     matched: true,
     mbid: detail.id || recording.id,
-    title: detail.title || recording.title || song.title,
-    artist: artist || song.artist || '',
+    title: detail.title || recording.title || cleanTitle || song.title,
+    artist: artist || cleanArtist || song.artist || '',
     album: release?.title || '',
     releaseDate: release?.date || detail['first-release-date'] || recording['first-release-date'] || '',
     coverArtUrl: release?.id ? 'https://coverartarchive.org/release/' + release.id + '/front-500' : '',
@@ -340,7 +348,7 @@ async function resolveSongMetadata(song) {
 
 function parseSongFilename(filePath) {
   const ext = path.extname(filePath);
-  const stem = path.basename(filePath, ext).trim();
+  const stem = cleanTransportSuffix(path.basename(filePath, ext).trim());
   const chunks = stem.split(/\s+[-–—]\s+/).map(part => part.trim()).filter(Boolean);
   let code = '';
   let title = stem;
@@ -435,7 +443,19 @@ function rebuildMaps() {
 function loadCachedLibrary() {
   const cached = readJson(libraryCacheFile(), null);
   if (!cached || !cached.root || !Array.isArray(cached.songs) || !fs.existsSync(cached.root)) return;
-  const normalizedSongs = cached.songs.map(song => ({ ...song, sourceCode: song.sourceCode ?? (song.generatedCode ? '' : (song.code || '')), generatedCode: Boolean(song.generatedCode) }));
+  const normalizedSongs = cached.songs.map(song => {
+    const title = cleanTransportSuffix(song.title || '');
+    const artist = cleanTransportSuffix(song.artist || '');
+    const normalized = {
+      ...song,
+      title: title || song.title,
+      artist: artist || song.artist,
+      sourceCode: song.sourceCode ?? (song.generatedCode ? '' : (song.code || '')),
+      generatedCode: Boolean(song.generatedCode)
+    };
+    normalized.key = normalize(`${normalized.code || ''} ${normalized.title || ''} ${normalized.artist || ''}`);
+    return normalized;
+  });
   songIndex = assignLocalCodes(normalizedSongs.map(song => ({ ...song, firstSeenAt: Number(song.firstSeenAt) || Number(song.mtimeMs) || Date.now(), mtimeMs: Number(song.mtimeMs) || 0 })), cached.songs);
   const visualRoot = cached.visualRoot || settings.bgvRoot || cached.root;
   visualIndex = normalizeVisuals(cached.visuals, visualRoot);
