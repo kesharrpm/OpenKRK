@@ -35,6 +35,9 @@ const introSurface = $('introSurface');
 const introCountdown = $('introCountdown');
 const introVisualName = $('introVisualName');
 const newSongsList = $('newSongsList');
+const newSongsSource = $('newSongsSource');
+const idleCurrentCode = $('idleCurrentCode');
+const idleCurrentTitle = $('idleCurrentTitle');
 const songIntroCard = $('songIntroCard');
 const songCover = $('songCover');
 const songCoverFallback = $('songCoverFallback');
@@ -536,17 +539,48 @@ function formatFreshDate(value) {
   return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' }).toUpperCase();
 }
 
-async function renderLatestSongs() {
-  const rows = await window.openkrk?.getLatestSongs?.(10) || [];
+async function renderLatestSongs(force = false) {
+  newSongsSource.textContent = force ? 'UPDATING ONLINE CATALOG…' : 'CHECKING ONLINE CATALOG…';
+  newSongsList.replaceChildren();
+  const waiting = document.createElement('div');
+  waiting.className = 'new-song-empty';
+  waiting.textContent = 'Matching current releases against your local MIDI folder…';
+  newSongsList.appendChild(waiting);
+
+  let discovery = null;
+  try {
+    discovery = await window.openkrk?.discoverCurrentSongs?.(10, force);
+  } catch (error) {
+    console.warn('[OpenKRK] discovery API:', error);
+  }
+
+  let rows = discovery?.items || [];
+  let fallback = false;
+  if (!rows.length) {
+    rows = await window.openkrk?.getLatestSongs?.(10) || [];
+    fallback = true;
+  }
+
   newSongsList.replaceChildren();
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'new-song-empty';
     empty.textContent = 'No MIDI / KAR songs found yet.';
     newSongsList.appendChild(empty);
+    newSongsSource.textContent = 'NO LOCAL SONGS';
     return;
   }
-  rows.forEach((song, index) => {
+
+  if (fallback) {
+    newSongsSource.textContent = discovery?.source === 'OFFLINE'
+      ? 'OFFLINE · LOCAL RECENT FALLBACK'
+      : 'NO API MATCHES · LOCAL RECENT FALLBACK';
+  } else {
+    const sourceText = (discovery.sources || []).join(' + ') || 'ONLINE';
+    newSongsSource.textContent = sourceText + ' · ' + formatCount(discovery.matchedCount || rows.length) + ' LOCAL MATCHES';
+  }
+
+  rows.slice(0, 10).forEach((song, index) => {
     const row = document.createElement('div');
     row.className = 'new-song-row';
     row.tabIndex = 0;
@@ -565,11 +599,15 @@ async function renderLatestSongs() {
 
     const added = document.createElement('span');
     added.className = 'new-song-date';
-    added.textContent = formatFreshDate(song.firstSeenAt || song.mtimeMs);
+    const apiDate = song.discovery?.releaseDate || '';
+    added.textContent = apiDate ? apiDate.slice(0, 10) : formatFreshDate(song.firstSeenAt || song.mtimeMs);
+    if (song.discovery?.source) row.title = 'Matched from ' + song.discovery.source;
 
     const accept = () => {
       codeBuffer = String(song.code || '');
       renderCode();
+      idleCurrentCode.textContent = song.code || '—';
+      idleCurrentTitle.textContent = (song.title || 'Untitled') + ' - ' + (song.artist || 'Unknown Artist');
       showToast((song.code || 'LOCAL') + ' · ' + (song.title || 'Untitled'));
       sfx.confirm();
     };
@@ -784,7 +822,7 @@ async function playResolvedSong(song) {
   if (!midiEngine.soundBankPath) { openSystem(); showToast('Choose a SoundFont / DLS in F4 before playing MIDI'); sfx.error(); return; }
   try {
     currentSong = song;
-    $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = song.title || 'Untitled'; $('nowArtist').textContent = song.artist || 'Unknown Artist';
+    $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = song.title || 'Untitled'; $('nowArtist').textContent = song.artist || 'Unknown Artist'; idleCurrentCode.textContent = song.code || '—'; idleCurrentTitle.textContent = (song.title || 'Untitled') + ' - ' + (song.artist || 'Unknown Artist');
     $('lyricCurrent').textContent = 'LOADING MIDI…'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
     setMode('player');
     revealSongIntro(song);
@@ -865,6 +903,7 @@ document.addEventListener('click', async event => {
   else if (action === 'setup-bgvs') { sfx.move(); await chooseVisualSource(); updateSetupUi(await refreshLibraryStatus()); }
   else if (action === 'setup-bank') { sfx.move(); await chooseSoundBank(); await refreshSoundBankStatus(); }
   else if (action === 'setup-continue') { if (!setupContinue.disabled) await runIntroSequence(); }
+  else if (action === 'refresh-new-songs') { sfx.move(); await renderLatestSongs(true); showToast('NEW SONGS UPDATED'); }
   else if (action === 'search') openSearch();
   else if (action === 'library') { sfx.move(); await chooseLibraryFolder(); }
   else if (action === 'visuals') openVisuals();
