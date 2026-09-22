@@ -643,7 +643,10 @@ function showToast(message, ms = 2300) {
 }
 function formatCount(value) { return new Intl.NumberFormat().format(Number(value) || 0); }
 function formatTime(value) { const seconds = Math.max(0, Math.floor(Number(value) || 0)); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; }
-function renderCode() { codeDisplay.textContent = codeBuffer ? codeBuffer.split('').join(' ') : '— — — — —'; }
+function renderCode() {
+  codeDisplay.textContent = codeBuffer ? codeBuffer.split('').join(' ') : '— — — — —';
+  scheduleCodePreview();
+}
 function pushDigit(digit) {
   if (!startupComplete) return;
   if (mode !== 'idle' && mode !== 'player') return;
@@ -651,7 +654,43 @@ function pushDigit(digit) {
   codeBuffer += digit;
   renderCode();
 }
-function clearCode() { codeBuffer = ''; renderCode(); }
+function clearCode() {
+  codeBuffer = '';
+  renderCode();
+}
+function scheduleCodePreview() {
+  clearTimeout(codePreviewTimer);
+  const serial = ++codePreviewSerial;
+  if (!numberPreview) return;
+
+  if (!codeBuffer) {
+    numberPreview.textContent = 'Type a song number';
+    numberPreview.classList.remove('found', 'missing');
+    return;
+  }
+  if (codeBuffer.length < 4) {
+    numberPreview.textContent = 'Keep typing…';
+    numberPreview.classList.remove('found', 'missing');
+    return;
+  }
+
+  numberPreview.textContent = 'Looking up…';
+  numberPreview.classList.remove('found', 'missing');
+  codePreviewTimer = setTimeout(async () => {
+    const requested = codeBuffer;
+    const song = await window.openkrk?.findSongByCode?.(requested);
+    if (serial !== codePreviewSerial || requested !== codeBuffer) return;
+    if (!song) {
+      numberPreview.textContent = 'No exact song for this number';
+      numberPreview.classList.add('missing');
+      numberPreview.classList.remove('found');
+      return;
+    }
+    numberPreview.textContent = cleanSongTitle(song.title || 'Untitled') + ' · ' + (song.artist || 'Unknown Artist');
+    numberPreview.classList.add('found');
+    numberPreview.classList.remove('missing');
+  }, 90);
+}
 
 function updateLibraryUi(status = {}) {
   lastLibraryStatus = { ...lastLibraryStatus, ...status };
@@ -802,18 +841,45 @@ async function loadArtworkInto(element, url) {
   } catch {}
 }
 
-function renderLatestPage() {
-  if (!latestPool.length) return;
-  if (!latestOrder.length || latestCursor + 8 > latestOrder.length) {
-    latestOrder = shuffled(latestPool);
-    latestCursor = 0;
+function setSpotlightMode(next, manual = false) {
+  if (!spotlightPools[next]?.length) {
+    next = next === 'new' ? 'top' : 'new';
+    if (!spotlightPools[next]?.length) return;
   }
-  const rows = latestOrder.slice(latestCursor, latestCursor + 8);
-  latestCursor += rows.length;
+
+  spotlightMode = next;
+  spotlightKicker.textContent = next === 'new' ? 'FRESH PICKS' : 'SING WHAT’S HOT';
+  spotlightTitle.textContent = next === 'new' ? 'NEW SONGS' : 'TOP HITS TO SING';
+  document.querySelectorAll('.spotlight-mode').forEach(button => {
+    const target = next === 'new' ? 'show-new-songs' : 'show-top-hits';
+    button.classList.toggle('active', button.dataset.action === target);
+  });
+
+  const count = spotlightPools[next].length;
+  newSongsSource.textContent = next === 'new'
+    ? formatCount(count) + ' recent songs'
+    : formatCount(count) + ' chart songs';
+
+  renderSpotlightPage();
+  if (manual) restartSpotlightRotation();
+}
+
+function renderSpotlightPage() {
+  const pool = spotlightPools[spotlightMode] || [];
+  if (!pool.length) return;
+
+  if (!spotlightOrders[spotlightMode].length || spotlightCursors[spotlightMode] + 8 > spotlightOrders[spotlightMode].length) {
+    spotlightOrders[spotlightMode] = shuffled(pool);
+    spotlightCursors[spotlightMode] = 0;
+  }
+
+  const rows = spotlightOrders[spotlightMode].slice(spotlightCursors[spotlightMode], spotlightCursors[spotlightMode] + 8);
+  spotlightCursors[spotlightMode] += rows.length;
 
   newSongsList.classList.add('rotating');
   setTimeout(() => {
     newSongsList.replaceChildren();
+
     rows.forEach((song, index) => {
       const row = document.createElement('div');
       row.className = 'new-song-row';
@@ -850,64 +916,68 @@ function renderLatestPage() {
       });
       newSongsList.appendChild(row);
 
-      const artwork = song.discovery?.artworkUrl || '';
-      if (artwork) loadArtworkInto(art, artwork);
+      if (song.discovery?.artworkUrl) loadArtworkInto(art, song.discovery.artworkUrl);
     });
+
     requestAnimationFrame(() => newSongsList.classList.remove('rotating'));
-  }, 170);
+  }, 160);
 }
 
-function startLatestRotation() {
+function restartSpotlightRotation() {
   clearInterval(latestRotateTimer);
-  if (latestPool.length <= 8) return;
   latestRotateTimer = setInterval(() => {
-    if (mode === 'idle') renderLatestPage();
-  }, 6500);
+    if (mode !== 'idle') return;
+    const order = spotlightOrders[spotlightMode] || [];
+    if ((spotlightPools[spotlightMode] || []).length > 8 && spotlightCursors[spotlightMode] < order.length) {
+      renderSpotlightPage();
+      return;
+    }
+    setSpotlightMode(spotlightMode === 'new' ? 'top' : 'new', false);
+  }, 7200);
 }
 
 async function renderLatestSongs(force = false) {
-  newSongsSource.textContent = force ? 'REFRESHING…' : 'FINDING RECENT TRACKS…';
+  newSongsSource.textContent = force ? 'Refreshing…' : 'Building discovery…';
   newSongsList.replaceChildren();
   const waiting = document.createElement('div');
   waiting.className = 'new-song-empty';
-  waiting.textContent = 'Finding recent songs…';
+  waiting.textContent = 'Finding songs you can sing…';
   newSongsList.appendChild(waiting);
 
   let discovery = null;
   try {
-    discovery = await window.openkrk?.discoverCurrentSongs?.(64, force);
+    discovery = await window.openkrk?.discoverCurrentSongs?.(96, force);
   } catch (error) {
     console.warn('[OpenKRK] discovery API:', error);
   }
 
-  let rows = discovery?.items || [];
-  let fallback = false;
-  if (!rows.length) {
-    rows = await window.openkrk?.getLatestSongs?.(64) || [];
-    fallback = true;
+  let newItems = discovery?.newItems || [];
+  let topItems = discovery?.topItems || [];
+
+  if (!newItems.length && !topItems.length) {
+    const fallback = await window.openkrk?.getLatestSongs?.(64) || [];
+    newItems = fallback;
+    topItems = shuffled(fallback);
   }
 
-  latestPool = rows;
-  latestOrder = shuffled(rows);
-  latestCursor = 0;
+  spotlightPools = { new: newItems, top: topItems };
+  spotlightOrders = { new: shuffled(newItems), top: shuffled(topItems) };
+  spotlightCursors = { new: 0, top: 0 };
 
-  if (!rows.length) {
+  if (!newItems.length && !topItems.length) {
     newSongsList.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'new-song-empty';
     empty.textContent = 'No songs found.';
     newSongsList.appendChild(empty);
-    newSongsSource.textContent = 'NO SONGS';
+    newSongsSource.textContent = '';
     clearInterval(latestRotateTimer);
     return;
   }
 
-  newSongsSource.textContent = fallback
-    ? 'RECENT SONGS'
-    : 'GLOBAL · ' + formatCount(discovery?.matchedCount || rows.length) + ' FOUND';
-
-  renderLatestPage();
-  startLatestRotation();
+  if (!spotlightPools[spotlightMode]?.length) spotlightMode = topItems.length ? 'top' : 'new';
+  setSpotlightMode(spotlightMode, false);
+  restartSpotlightRotation();
 }
 
 function showSetup() {
@@ -989,7 +1059,7 @@ function renderMetadataCard(song, metadata = null) {
   const artist = metadata?.artist || song?.artist || 'Unknown Artist';
   $('metaTitle').textContent = title;
   $('metaArtist').textContent = artist;
-  $('metaAlbum').textContent = metadata?.album || '';
+  $('metaAlbum').textContent = metadata?.displayTag || metadata?.album || '';
   $('metaCredits').textContent = '';
   $('metaReleaseDate').textContent = metadata?.releaseDate || '';
 
@@ -1071,28 +1141,41 @@ async function performSearch(query) {
 
 function renderLyricLine(index, time) {
   if (!currentLyrics.length || index < 0 || index >= currentLyrics.length) {
-    $('lyricPrev').textContent = ''; $('lyricCurrent').textContent = '♪'; $('lyricRomanized').textContent = ''; $('lyricNext').textContent = ''; return;
+    $('lyricCurrent').textContent = '♪';
+    $('lyricNext').textContent = '';
+    return;
   }
+
   const line = currentLyrics[index];
-  $('lyricPrev').textContent = currentLyrics[index - 1]?.text || '';
   $('lyricNext').textContent = currentLyrics[index + 1]?.text || '';
-  $('lyricRomanized').textContent = prefs.romanizedEnabled ? (line.romanized || '') : '';
   const current = $('lyricCurrent');
+
   if (currentLyricLine !== index) {
     current.replaceChildren();
     for (const segment of line.segments) {
-      const span = document.createElement('span'); span.className = 'lyric-segment'; span.dataset.text = segment.text; span.textContent = segment.text; span.style.setProperty('--segment-fill', '0%'); current.appendChild(span);
+      const span = document.createElement('span');
+      span.className = 'lyric-segment';
+      span.dataset.text = segment.text;
+      span.textContent = segment.text;
+      span.style.setProperty('--segment-fill', '0%');
+      current.appendChild(span);
     }
     currentLyricLine = index;
   }
+
   const spans = [...current.querySelectorAll('.lyric-segment')];
   line.segments.forEach((segment, i) => {
-    const progress = Math.max(0, Math.min(1, (time - segment.start) / Math.max(0.04, segment.end - segment.start)));
-    spans[i]?.style.setProperty('--segment-fill', `${progress * 100}%`);
+    const progress = Math.max(0, Math.min(1, (time - segment.start) / Math.max(.05, segment.end - segment.start)));
+    spans[i]?.style.setProperty('--segment-fill', (progress * 100) + '%');
   });
 }
+
 function updateLyrics(time) {
-  if (!currentLyrics.length) return;
+  if (!currentLyrics.length) {
+    $('lyricCurrent').textContent = '♪';
+    $('lyricNext').textContent = '';
+    return;
+  }
 
   const activeIndex = currentLyrics.findIndex(line => time >= line.start && time < line.end);
   if (activeIndex >= 0) {
@@ -1100,32 +1183,47 @@ function updateLyrics(time) {
     return;
   }
 
-  let previousIndex = -1;
-  let nextIndex = -1;
-  for (let i = 0; i < currentLyrics.length; i += 1) {
-    if (currentLyrics[i].start <= time) previousIndex = i;
-    else { nextIndex = i; break; }
-  }
-
+  const nextIndex = currentLyrics.findIndex(line => line.start > time);
   const current = $('lyricCurrent');
   current.replaceChildren();
-  current.textContent = '♪';
-  $('lyricPrev').textContent = previousIndex >= 0 ? currentLyrics[previousIndex].text : '';
-  $('lyricNext').textContent = nextIndex >= 0 ? currentLyrics[nextIndex].text : '';
-  $('lyricRomanized').textContent = '';
+  current.textContent = nextIndex >= 0 ? currentLyrics[nextIndex].text : '♪';
+  $('lyricNext').textContent = nextIndex >= 0 ? (currentLyrics[nextIndex + 1]?.text || '') : '';
   currentLyricLine = -1;
 }
+
+function handleSequencerTextEvent(payload) {
+  if (!currentSong || !currentLyrics.length) return;
+  const tick = Number(payload?.event?.ticks);
+  if (!Number.isFinite(tick)) return;
+
+  let expected = null;
+  for (const line of currentLyrics) {
+    const segment = line.segments?.find(item => Number(item.tick) === tick);
+    if (segment) { expected = Number(segment.start); break; }
+  }
+  if (!Number.isFinite(expected)) return;
+
+  const actual = Number(midiEngine.state().currentTime);
+  if (!Number.isFinite(actual)) return;
+  const delta = actual - expected;
+  if (Math.abs(delta) > 1.8) return;
+
+  liveLyricSamples.push(delta);
+  if (liveLyricSamples.length > 9) liveLyricSamples.shift();
+  const robust = median(liveLyricSamples);
+  liveLyricCorrectionSec = liveLyricSamples.length < 3
+    ? robust
+    : (liveLyricCorrectionSec * .62 + robust * .38);
+}
+midiEngine.onTextEvent = handleSequencerTextEvent;
 
 function startTransportLoop() {
   cancelAnimationFrame(transportRaf);
   const tick = () => {
     const state = midiEngine.state();
     if (currentSong && state.ready) {
-      $('elapsed').textContent = formatTime(state.currentTime);
-      $('remaining').textContent = `-${formatTime(Math.max(0, state.duration - state.currentTime))}`;
-      $('progressFill').style.width = `${state.duration > 0 ? Math.min(100, (state.currentTime / state.duration) * 100) : 0}%`;
       $('playState').textContent = state.paused ? 'PAUSE' : 'PLAY';
-      const lyricTime = Math.max(0, state.currentTime - (activeLyricDelayMs / 1000));
+      const lyricTime = Math.max(0, state.currentTime - liveLyricCorrectionSec - (activeLyricDelayMs / 1000));
       updateLyrics(lyricTime);
       if (state.finished && state.duration > 0) { stopCurrentSong(false); return; }
     }
@@ -1133,15 +1231,18 @@ function startTransportLoop() {
   };
   transportRaf = requestAnimationFrame(tick);
 }
+
 async function playResolvedSong(song) {
   if (!song) return;
   if (!midiEngine.soundBankPath) { openSystem(); showToast('Choose a SoundFont / DLS in F4 before playing MIDI'); sfx.error(); return; }
   try {
     currentSong = song;
+    liveLyricCorrectionSec = 0;
+    liveLyricSamples = [];
     loadSongLyricDelay(song);
     const displayTitle = cleanSongTitle(song.title || 'Untitled');
     $('nowCode').textContent = song.code || '—'; $('nowTitle').textContent = displayTitle; $('nowArtist').textContent = song.artist || 'Unknown Artist'; idleCurrentCode.textContent = song.code || '—'; idleCurrentTitle.textContent = displayTitle + ' · ' + (song.artist || 'Unknown Artist');
-    $('lyricCurrent').textContent = 'LOADING MIDI…'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
+    $('lyricCurrent').textContent = '♪'; $('lyricPrev').textContent = ''; $('lyricNext').textContent = '';
     setMode('player');
     revealSongIntro(song);
     const binary = await midiEngine.playSong(song);
@@ -1158,7 +1259,7 @@ async function playResolvedSong(song) {
   }
 }
 function stopCurrentSong(withSfx = true) {
-  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; activeLyricDelayMs = Number(prefs.lyricDelayMs) || 0; cancelAnimationFrame(transportRaf); clearTimeout(songIntroTimer); songIntroCard.classList.remove('hidden'); setLyricDelay(activeLyricDelayMs, false);
+  midiEngine.stop(); currentSong = null; currentLyrics = []; currentLyricLine = -1; liveLyricCorrectionSec = 0; liveLyricSamples = []; activeLyricDelayMs = Number(prefs.lyricDelayMs) || 0; cancelAnimationFrame(transportRaf); clearTimeout(songIntroTimer); songIntroCard.classList.remove('hidden'); setLyricDelay(activeLyricDelayMs, false);
   $('progressFill').style.width = '0%'; $('elapsed').textContent = '0:00'; $('remaining').textContent = '-0:00'; setMode('idle'); if (withSfx) sfx.back();
 }
 async function reserveCode(immediate = false) {
