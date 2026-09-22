@@ -23,6 +23,7 @@ let lastMusicBrainzRequestAt = 0;
 function settingsFile() { return path.join(app.getPath('userData'), 'openkrk-settings.json'); }
 function libraryCacheFile() { return path.join(app.getPath('userData'), 'openkrk-library-index.json'); }
 function metadataCacheFile() { return path.join(app.getPath('userData'), 'openkrk-metadata-cache.json'); }
+function discoveryCacheFile() { return path.join(app.getPath('userData'), 'openkrk-discovery-cache.json'); }
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJson(file, value) {
   try {
@@ -85,6 +86,194 @@ async function musicBrainzJson(url) {
   lastMusicBrainzRequestAt = Date.now();
   if (!response.ok) throw new Error('MusicBrainz HTTP ' + response.status);
   return response.json();
+}
+
+
+function cleanDiscoveryText(value = '') {
+  return normalize(String(value)
+    .replace(/\([^)]*(feat|ft|remaster|version|edit|mix)[^)]*\)/ig, ' ')
+    .replace(/\[[^\]]*(feat|ft|remaster|version|edit|mix)[^\]]*\]/ig, ' ')
+    .replace(/\s+-\s+(remaster(ed)?|live|radio edit|single version).*$/ig, ' '));
+}
+
+function songTitleKey(song) { return cleanDiscoveryText(song?.title || ''); }
+function songArtistKey(song) { return cleanDiscoveryText(song?.artist || ''); }
+
+function buildDiscoveryLookup() {
+  const byTitle = new Map();
+  for (const song of songIndex) {
+    const key = songTitleKey(song);
+    if (!key) continue;
+    if (!byTitle.has(key)) byTitle.set(key, []);
+    byTitle.get(key).push(song);
+  }
+  return byTitle;
+}
+
+function matchDiscoveryCandidate(candidate, byTitle) {
+  const titleKey = cleanDiscoveryText(candidate.title);
+  if (!titleKey) return null;
+  const direct = byTitle.get(titleKey) || [];
+  const artistKey = cleanDiscoveryText(candidate.artist);
+  if (direct.length) {
+    const artistMatch = direct.find(song => {
+      const localArtist = songArtistKey(song);
+      return artistKey && localArtist && (localArtist.includes(artistKey) || artistKey.includes(localArtist));
+    });
+    if (artistMatch) return artistMatch;
+    if (direct.length === 1) return direct[0];
+    const unknown = direct.find(song => !song.artist || song.artist === 'Unknown Artist');
+    if (unknown) return unknown;
+  }
+
+  // Conservative fuzzy fallback for common filename variations.
+  const tokens = titleKey.split(' ').filter(token => token.length > 1);
+  if (tokens.length < 2) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const song of songIndex) {
+    const localTitle = songTitleKey(song);
+    if (!localTitle) continue;
+    const localTokens = new Set(localTitle.split(' ').filter(token => token.length > 1));
+    const overlap = tokens.filter(token => localTokens.has(token)).length / Math.max(tokens.length, localTokens.size);
+    if (overlap < 0.76) continue;
+    let score = overlap;
+    const localArtist = songArtistKey(song);
+    if (artistKey && localArtist && (localArtist.includes(artistKey) || artistKey.includes(localArtist))) score += 0.22;
+    if (score > bestScore) { best = song; bestScore = score; }
+  }
+  return bestScore >= 0.82 ? best : null;
+}
+
+async function fetchJsonWithTimeout(url, headers = {}, timeoutMs = 9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'OpenKRK/0.3 (https://github.com/kesharrpm/OpenKRK)',
+        ...headers
+      },
+      redirect: 'follow',
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchApplePhilippinesChart() {
+  const url = 'https://rss.applemarketingtools.com/api/v2/ph/music/most-played/100/songs.json';
+  const json = await fetchJsonWithTimeout(url);
+  return (json?.feed?.results || []).map((item, index) => ({
+    title: item.name || '',
+    artist: item.artistName || '',
+    releaseDate: item.releaseDate || '',
+    artworkUrl: item.artworkUrl100 || '',
+    source: 'Apple Music PH',
+    sourceKind: 'chart',
+    rank: index + 1
+  }));
+}
+
+async function fetchMusicBrainzRecentReleases() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 75 * 24 * 60 * 60 * 1000);
+  const iso = date => date.toISOString().slice(0, 10);
+  const url = new URL('https://musicbrainz.org/ws/2/release/');
+  url.searchParams.set('query', 'date:[' + iso(start) + ' TO ' + iso(end) + '] AND status:official');
+  url.searchParams.set('fmt', 'json');
+  url.searchParams.set('limit', '100');
+  const json = await musicBrainzJson(url);
+  return (json?.releases || []).map(item => ({
+    title: item.title || '',
+    artist: (item['artist-credit'] || []).map(credit => credit.name || credit.artist?.name).filter(Boolean).join(''),
+    releaseDate: item.date || '',
+    artworkUrl: item.id ? 'https://coverartarchive.org/release/' + item.id + '/front-250' : '',
+    source: 'MusicBrainz Recent',
+    sourceKind: 'release',
+    rank: 999
+  }));
+}
+
+function discoverySortValue(item) {
+  const time = Date.parse(item.releaseDate || '') || 0;
+  const sourceBoost = item.sourceKind === 'release' ? 100000 : 0;
+  const rankBoost = item.sourceKind === 'chart' ? Math.max(0, 101 - Number(item.rank || 101)) : 0;
+  return time + sourceBoost + rankBoost;
+}
+
+async function discoverCurrentLibrarySongs(limit = 10, force = false) {
+  const max = Math.max(1, Math.min(Number(limit) || 10, 30));
+  const cached = readJson(discoveryCacheFile(), null);
+  const cacheAge = cached?.fetchedAt ? Date.now() - Number(cached.fetchedAt) : Infinity;
+  if (!force && cached?.items?.length && cacheAge < 6 * 60 * 60 * 1000) {
+    const byCode = new Map(songIndex.map(song => [String(song.code), song]));
+    const restored = cached.items.map(item => {
+      const song = byCode.get(String(item.code));
+      return song ? { ...song, discovery: item.discovery } : null;
+    }).filter(Boolean).slice(0, max);
+    if (restored.length) return { ...cached, items: restored, cached: true };
+  }
+
+  const candidates = [];
+  const errors = [];
+  const results = await Promise.allSettled([
+    fetchApplePhilippinesChart(),
+    fetchMusicBrainzRecentReleases()
+  ]);
+  for (const result of results) {
+    if (result.status === 'fulfilled') candidates.push(...result.value);
+    else errors.push(result.reason?.message || String(result.reason));
+  }
+
+  const byTitle = buildDiscoveryLookup();
+  const matched = [];
+  const usedCodes = new Set();
+  for (const candidate of candidates) {
+    const song = matchDiscoveryCandidate(candidate, byTitle);
+    if (!song || usedCodes.has(String(song.code))) continue;
+    usedCodes.add(String(song.code));
+    matched.push({
+      ...song,
+      discovery: {
+        title: candidate.title,
+        artist: candidate.artist,
+        releaseDate: candidate.releaseDate,
+        artworkUrl: candidate.artworkUrl,
+        source: candidate.source,
+        sourceKind: candidate.sourceKind,
+        rank: candidate.rank
+      }
+    });
+  }
+
+  matched.sort((a, b) => discoverySortValue(b.discovery) - discoverySortValue(a.discovery));
+  const items = matched.slice(0, max);
+  const payload = {
+    fetchedAt: Date.now(),
+    source: results.some(result => result.status === 'fulfilled') ? 'ONLINE' : 'OFFLINE',
+    sources: [
+      ...(results[0]?.status === 'fulfilled' ? ['Apple Music PH'] : []),
+      ...(results[1]?.status === 'fulfilled' ? ['MusicBrainz Recent'] : [])
+    ],
+    candidateCount: candidates.length,
+    matchedCount: matched.length,
+    errors,
+    items
+  };
+
+  writeJson(discoveryCacheFile(), {
+    ...payload,
+    items: items.map(item => ({
+      code: item.code,
+      discovery: item.discovery
+    }))
+  });
+  return payload;
 }
 
 async function resolveSongMetadata(song) {
@@ -366,6 +555,7 @@ ipcMain.handle('library:rescan', async event => {
 });
 ipcMain.handle('library:status', () => ({ root: settings.mediaRoot || settings.libraryRoot || '', bgvRoot: settings.bgvRoot || '', count: songIndex.length, visualCount: visualIndex.length, scanning: scanState.scanning, scanned: scanState.scanned }));
 ipcMain.handle('library:latest', (_event, limit = 10) => newestSongs(limit));
+ipcMain.handle('library:discover-current', async (_event, limit = 10, force = false) => discoverCurrentLibrarySongs(limit, Boolean(force)));
 ipcMain.handle('media:visual-catalog', () => visualCatalog());
 ipcMain.handle('library:find-code', (_event, code) => songByCode.get(String(code || '').trim()) || null);
 ipcMain.handle('library:search', (_event, query, limit = 80) => {
