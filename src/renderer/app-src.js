@@ -894,7 +894,7 @@ document.addEventListener('keydown', async event => {
   if (event.key === 'Backspace') { event.preventDefault(); codeBuffer = codeBuffer.slice(0, -1); renderCode(); sfx.move(); return; }
   if (event.key === 'Escape') { event.preventDefault(); if (currentSong) stopCurrentSong(); else { clearCode(); sfx.back(); } return; }
   if (event.key === ' ') { if (currentSong) { event.preventDefault(); const paused = midiEngine.togglePause(); showToast(paused ? 'PAUSED' : 'RESUMED'); sfx.move(); } return; }
-  if (event.key === 'Enter') { event.preventDefault(); await reserveCode(event.ctrlKey || event.metaKey); return; }
+  if (event.key === 'Enter') { event.preventDefault(); await reserveCode(true); return; }
   if (event.key === 'F1') { event.preventDefault(); openSearch(); return; }
   if (event.key === 'F2') { event.preventDefault(); await chooseLibraryFolder(); return; }
   if (event.key === 'F3') { event.preventDefault(); openVisuals(); return; }
