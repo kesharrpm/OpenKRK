@@ -186,25 +186,19 @@ function scoreTrackMatch(localTitle, localArtist, item) {
 }
 
 async function searchItunesTrack(title, artist) {
-  const storefronts = ['US', 'GB', 'JP', 'KR'];
+  const url = new URL('https://itunes.apple.com/search');
+  url.searchParams.set('term', [title, artist].filter(Boolean).join(' '));
+  url.searchParams.set('country', 'US');
+  url.searchParams.set('media', 'music');
+  url.searchParams.set('entity', 'song');
+  url.searchParams.set('limit', '25');
+
+  const json = await itunesJson(url);
   let best = null;
   let bestScore = 0;
-  for (const country of storefronts) {
-    const url = new URL('https://itunes.apple.com/search');
-    url.searchParams.set('term', [title, artist].filter(Boolean).join(' '));
-    url.searchParams.set('country', country);
-    url.searchParams.set('media', 'music');
-    url.searchParams.set('entity', 'song');
-    url.searchParams.set('limit', '20');
-    const json = await itunesJson(url);
-    for (const item of json?.results || []) {
-      const score = scoreTrackMatch(title, artist, item);
-      if (score > bestScore) {
-        best = item;
-        bestScore = score;
-      }
-    }
-    if (bestScore >= 1.02) break;
+  for (const item of json?.results || []) {
+    const score = scoreTrackMatch(title, artist, item);
+    if (score > bestScore) { best = item; bestScore = score; }
   }
   return bestScore >= 0.82 ? best : null;
 }
@@ -333,7 +327,7 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
   const max = Math.max(1, Math.min(Number(limit) || 36, 80));
   const cached = readJson(discoveryCacheFile(), null);
   const cacheAge = cached?.fetchedAt ? Date.now() - Number(cached.fetchedAt) : Infinity;
-  if (!force && cached?.items?.length && cacheAge < 6 * 60 * 60 * 1000) {
+  if (!force && cached?.version === 2 && cached?.items?.length && cacheAge < 6 * 60 * 60 * 1000) {
     const byCode = new Map(songIndex.map(song => [String(song.code), song]));
     const restored = cached.items.map(item => {
       const song = byCode.get(String(item.code));
@@ -382,6 +376,7 @@ async function discoverCurrentLibrarySongs(limit = 10, force = false) {
   matched.sort((a, b) => discoverySortValue(b.discovery) - discoverySortValue(a.discovery));
   const items = matched.slice(0, max);
   const payload = {
+    version: 2,
     fetchedAt: Date.now(),
     source: results.some(result => result.status === 'fulfilled') ? 'ONLINE' : 'OFFLINE',
     sources: [
