@@ -26,30 +26,38 @@
     </section>
 
     <section id="setupSurface" class="setup-surface startup-layer" aria-hidden="true">
-      <div class="setup-card">
-        <div class="setup-kicker">ROOM SETUP</div>
-        <h1>Connect your karaoke library</h1>
-        <p>Choose your songs, background videos, and MIDI sound bank. You can change all three later from System.</p>
-        <div class="setup-grid">
+      <div class="setup-shell">
+        <div class="setup-hero">
+          <span class="setup-eyebrow">OPENKRK ROOM SETUP</span>
+          <h1>Build your<br><em>karaoke room.</em></h1>
+          <p>Three connections. One room. Songs, moving visuals, and your MIDI soundbank stay ready every time you open OpenKRK.</p>
+          <div class="setup-signal" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <div class="setup-statusline"><span>PC PLAYER</span><b>HTML STAGE</b><span>SPESSASYNTH</span></div>
+        </div>
+
+        <div class="setup-console">
           <button class="setup-source" data-action="setup-songs">
-            <span>01</span><strong>SONGS</strong>
-            <small id="setupSongPath">Choose MID / MIDI / KAR folder</small>
-            <b id="setupSongCount">NOT CONNECTED</b>
+            <span class="setup-step">01</span>
+            <div><strong>Song library</strong><small id="setupSongPath">Choose MID / MIDI / KAR folder</small></div>
+            <b id="setupSongCount">CONNECT</b>
           </button>
           <button class="setup-source" data-action="setup-bgvs">
-            <span>02</span><strong>BGV</strong>
-            <small id="setupBgvPath">Choose video folder</small>
+            <span class="setup-step">02</span>
+            <div><strong>Background videos</strong><small id="setupBgvPath">Choose your BGV folder</small></div>
             <b id="setupBgvCount">OPTIONAL</b>
           </button>
           <button class="setup-source" data-action="setup-bank">
-            <span>03</span><strong>SOUNDBANK</strong>
-            <small id="setupBankPath">Choose SF2 / SF3 / DLS</small>
-            <b id="setupBankState">REQUIRED TO PLAY</b>
+            <span class="setup-step">03</span>
+            <div><strong>MIDI soundbank</strong><small id="setupBankPath">Choose SF2 / SF3 / DLS</small></div>
+            <b id="setupBankState">CONNECT</b>
           </button>
-        </div>
-        <div class="setup-foot">
-          <span id="setupHint">Add a songs folder to continue.</span>
-          <button id="setupContinue" data-action="setup-continue" disabled>ENTER ROOM</button>
+
+          <div class="setup-foot">
+            <span id="setupHint">Add a songs folder to continue.</span>
+            <button id="setupContinue" data-action="setup-continue" disabled>START ROOM</button>
+          </div>
         </div>
       </div>
     </section>
@@ -75,18 +83,25 @@
     <section id="idleSurface" class="idle-surface">
       <div id="numberConsole" class="number-console top-entry">
         <span class="number-caption">SONG NO.</span>
-        <div id="codeDisplay" class="code-display">— — — — —</div>
+        <div class="number-main">
+          <div id="codeDisplay" class="code-display">— — — — —</div>
+          <div id="numberPreview" class="number-preview">Type a song number</div>
+        </div>
         <span id="entryMode" class="entry-mode">ENTER TO PLAY</span>
       </div>
 
       <section id="newSongsDeck" class="new-songs-deck" aria-label="New songs">
         <div class="new-songs-banner">
-          <div>
-            <small>GLOBAL DISCOVERY</small>
-            <strong>NEW SONGS</strong>
+          <div class="spotlight-heading">
+            <small id="spotlightKicker">FRESH PICKS</small>
+            <strong id="spotlightTitle">NEW SONGS</strong>
             <span id="newSongsSource">UPDATING…</span>
           </div>
-          <button class="new-refresh" data-action="refresh-new-songs" title="Refresh new songs">↻</button>
+          <div class="spotlight-actions">
+            <button class="spotlight-mode active" data-action="show-new-songs">NEW</button>
+            <button class="spotlight-mode" data-action="show-top-hits">TOP HITS</button>
+            <button class="new-refresh" data-action="refresh-new-songs" title="Refresh discovery">↻</button>
+          </div>
         </div>
         <div class="new-songs-head">
           <span></span><span>NO.</span><span>SONG</span><span>ARTIST</span>
@@ -135,23 +150,23 @@
       </div>
 
       <div class="lyric-zone">
-        <div id="lyricPrev" class="lyric lyric-prev"></div>
+        <div id="lyricPrev" class="lyric lyric-prev internal-status"></div>
         <div id="lyricCurrent" class="lyric lyric-current">♪</div>
-        <div id="lyricRomanized" class="lyric lyric-romanized"></div>
         <div id="lyricNext" class="lyric lyric-next"></div>
+        <div id="lyricRomanized" class="lyric lyric-romanized internal-status"></div>
       </div>
 
-      <div class="transport">
+      <div class="transport internal-status" aria-hidden="true">
         <span id="elapsed">0:00</span>
         <div class="transport-line"><i id="progressFill"></i></div>
         <span id="remaining">-0:00</span>
         <div class="transport-state">
           <span id="playState">PLAY</span>
           <span id="lyricDelayHud">SYNC +0.00s</span>
-          <span class="metadata-hidden">KEY <b id="keyValue">0</b></span>
-          <span class="metadata-hidden">TEMPO <b id="tempoValue">100%</b></span>
+          <span>KEY <b id="keyValue">0</b></span>
+          <span>TEMPO <b id="tempoValue">100%</b></span>
         </div>
-      </div>
+      </div>/div>
     </section>
 
     <section id="searchSurface" class="panel-surface search-surface" aria-hidden="true">
