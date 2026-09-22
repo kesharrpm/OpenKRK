@@ -17,9 +17,12 @@ let visualIndex = [];
 let allowedBinaryPaths = new Set();
 let settings = { mediaRoot: '', libraryRoot: '', bgvRoot: '', soundBankPath: '' };
 let scanState = { scanning: false, root: '', scanned: 0, songs: 0, visuals: 0 };
+let metadataCache = {};
+let lastMusicBrainzRequestAt = 0;
 
 function settingsFile() { return path.join(app.getPath('userData'), 'openkrk-settings.json'); }
 function libraryCacheFile() { return path.join(app.getPath('userData'), 'openkrk-library-index.json'); }
+function metadataCacheFile() { return path.join(app.getPath('userData'), 'openkrk-metadata-cache.json'); }
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJson(file, value) {
   try {
@@ -33,6 +36,118 @@ function normalize(value = '') {
   return String(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 function canonicalPath(filePath) { return path.resolve(String(filePath || '')).toLowerCase(); }
+
+async function hydrateSongFreshness(files, previousSongs = []) {
+  const previousByPath = new Map(previousSongs.filter(Boolean).map(song => [canonicalPath(song.path), song]));
+  const now = Date.now();
+  const songs = [];
+  const concurrency = 96;
+  for (let start = 0; start < files.length; start += concurrency) {
+    const batch = files.slice(start, start + concurrency);
+    const hydrated = await Promise.all(batch.map(async filePath => {
+      const parsed = parseSongFilename(filePath);
+      const previous = previousByPath.get(canonicalPath(filePath));
+      let mtimeMs = Number(previous?.mtimeMs) || 0;
+      try { mtimeMs = (await fs.promises.stat(filePath)).mtimeMs || mtimeMs; } catch {}
+      return {
+        ...parsed,
+        mtimeMs,
+        firstSeenAt: Number(previous?.firstSeenAt) || now,
+        lastSeenAt: now
+      };
+    }));
+    songs.push(...hydrated);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return songs;
+}
+
+function newestSongs(limit = 10) {
+  const max = Math.max(1, Math.min(Number(limit) || 10, 40));
+  return [...songIndex]
+    .sort((a, b) => (Number(b.firstSeenAt) - Number(a.firstSeenAt)) || (Number(b.mtimeMs) - Number(a.mtimeMs)) || String(a.title).localeCompare(String(b.title)))
+    .slice(0, max);
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function escapeMbQuery(value = '') { return String(value).replace(/[\\"]/g, match => '\\' + match).trim(); }
+
+async function musicBrainzJson(url) {
+  const wait = Math.max(0, 1100 - (Date.now() - lastMusicBrainzRequestAt));
+  if (wait) await sleep(wait);
+  const response = await fetch(url, {
+    headers: {
+      'Accept': 'application/json',
+      'User-Agent': 'OpenKRK/0.3 (https://github.com/kesharrpm/OpenKRK)'
+    },
+    redirect: 'follow'
+  });
+  lastMusicBrainzRequestAt = Date.now();
+  if (!response.ok) throw new Error('MusicBrainz HTTP ' + response.status);
+  return response.json();
+}
+
+async function resolveSongMetadata(song) {
+  if (!song?.title) return null;
+  const cacheKey = normalize(String(song.title) + '|' + String(song.artist || ''));
+  if (metadataCache[cacheKey]) return metadataCache[cacheKey];
+
+  const queryParts = ['recording:"' + escapeMbQuery(song.title) + '"'];
+  if (song.artist && song.artist !== 'Unknown Artist') queryParts.push('artist:"' + escapeMbQuery(song.artist) + '"');
+  const searchUrl = new URL('https://musicbrainz.org/ws/2/recording/');
+  searchUrl.searchParams.set('query', queryParts.join(' AND '));
+  searchUrl.searchParams.set('fmt', 'json');
+  searchUrl.searchParams.set('limit', '5');
+
+  const search = await musicBrainzJson(searchUrl);
+  const recording = (search.recordings || [])[0];
+  if (!recording) {
+    const empty = { source: 'MusicBrainz', matched: false, title: song.title, artist: song.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] };
+    metadataCache[cacheKey] = empty;
+    writeJson(metadataCacheFile(), metadataCache);
+    return empty;
+  }
+
+  const detailUrl = new URL('https://musicbrainz.org/ws/2/recording/' + recording.id);
+  detailUrl.searchParams.set('inc', 'artist-credits+releases+work-rels');
+  detailUrl.searchParams.set('fmt', 'json');
+  let detail = recording;
+  try { detail = await musicBrainzJson(detailUrl); } catch {}
+
+  const artist = (detail['artist-credit'] || recording['artist-credit'] || []).map(item => item.name || item.artist?.name).filter(Boolean).join('');
+  const releases = detail.releases || recording.releases || [];
+  const release = releases.find(item => item.date) || releases[0] || null;
+  const workRelation = (detail.relations || []).find(rel => rel.work?.id);
+  const composers = [];
+
+  if (workRelation?.work?.id) {
+    try {
+      const workUrl = new URL('https://musicbrainz.org/ws/2/work/' + workRelation.work.id);
+      workUrl.searchParams.set('inc', 'artist-rels');
+      workUrl.searchParams.set('fmt', 'json');
+      const work = await musicBrainzJson(workUrl);
+      for (const rel of work.relations || []) {
+        if (!rel.artist?.name) continue;
+        if (['writer', 'composer', 'lyricist'].includes(String(rel.type || '').toLowerCase())) composers.push({ name: rel.artist.name, role: rel.type });
+      }
+    } catch {}
+  }
+
+  const metadata = {
+    source: 'MusicBrainz',
+    matched: true,
+    mbid: detail.id || recording.id,
+    title: detail.title || recording.title || song.title,
+    artist: artist || song.artist || '',
+    album: release?.title || '',
+    releaseDate: release?.date || detail['first-release-date'] || recording['first-release-date'] || '',
+    coverArtUrl: release?.id ? 'https://coverartarchive.org/release/' + release.id + '/front-500' : '',
+    composers: composers.slice(0, 6)
+  };
+  metadataCache[cacheKey] = metadata;
+  writeJson(metadataCacheFile(), metadataCache);
+  return metadata;
+}
 
 function parseSongFilename(filePath) {
   const ext = path.extname(filePath);
@@ -132,7 +247,7 @@ function loadCachedLibrary() {
   const cached = readJson(libraryCacheFile(), null);
   if (!cached || !cached.root || !Array.isArray(cached.songs) || !fs.existsSync(cached.root)) return;
   const normalizedSongs = cached.songs.map(song => ({ ...song, sourceCode: song.sourceCode ?? (song.generatedCode ? '' : (song.code || '')), generatedCode: Boolean(song.generatedCode) }));
-  songIndex = assignLocalCodes(normalizedSongs, cached.songs);
+  songIndex = assignLocalCodes(normalizedSongs.map(song => ({ ...song, firstSeenAt: Number(song.firstSeenAt) || Number(song.mtimeMs) || Date.now(), mtimeMs: Number(song.mtimeMs) || 0 })), cached.songs);
   const visualRoot = cached.visualRoot || settings.bgvRoot || cached.root;
   visualIndex = normalizeVisuals(cached.visuals, visualRoot);
   settings.mediaRoot = cached.root;
@@ -193,7 +308,7 @@ async function collectFiles(root, extensions, limit) {
 }
 
 function saveLibraryCache(root) {
-  writeJson(libraryCacheFile(), { version: 3, root, visualRoot: settings.bgvRoot || root, songs: songIndex, visuals: visualIndex });
+  writeJson(libraryCacheFile(), { version: 4, root, visualRoot: settings.bgvRoot || root, songs: songIndex, visuals: visualIndex });
 }
 
 async function scanLibrary(root, sender) {
@@ -206,11 +321,15 @@ async function scanLibrary(root, sender) {
       scanState.scanned = progress.visited; scanState.songs = progress.songs; scanState.visuals = progress.visuals;
       sender?.send('library:scan-progress', { ...scanState });
     });
-    songIndex = assignLocalCodes(media.midiFiles.map(parseSongFilename), previousSongs);
+    const hydratedSongs = await hydrateSongFreshness(media.midiFiles, previousSongs);
+    songIndex = assignLocalCodes(hydratedSongs, previousSongs);
     settings.mediaRoot = root;
     settings.libraryRoot = root;
-    settings.bgvRoot = root;
-    visualIndex = media.videoFiles.map(filePath => makeVisualRecord(filePath, root));
+    if (!settings.bgvRoot) settings.bgvRoot = root;
+    if (!visualIndex.length || canonicalPath(settings.bgvRoot) === canonicalPath(root)) {
+      settings.bgvRoot = root;
+      visualIndex = media.videoFiles.map(filePath => makeVisualRecord(filePath, root));
+    }
     rebuildMaps();
     writeJson(settingsFile(), settings);
     saveLibraryCache(root);
@@ -245,7 +364,8 @@ ipcMain.handle('library:rescan', async event => {
   if (!root) return { canceled: true, reason: 'no-root' };
   return scanLibrary(root, event.sender);
 });
-ipcMain.handle('library:status', () => ({ root: settings.mediaRoot || settings.libraryRoot || '', count: songIndex.length, visualCount: visualIndex.length, scanning: scanState.scanning, scanned: scanState.scanned }));
+ipcMain.handle('library:status', () => ({ root: settings.mediaRoot || settings.libraryRoot || '', bgvRoot: settings.bgvRoot || '', count: songIndex.length, visualCount: visualIndex.length, scanning: scanState.scanning, scanned: scanState.scanned }));
+ipcMain.handle('library:latest', (_event, limit = 10) => newestSongs(limit));
 ipcMain.handle('media:visual-catalog', () => visualCatalog());
 ipcMain.handle('library:find-code', (_event, code) => songByCode.get(String(code || '').trim()) || null);
 ipcMain.handle('library:search', (_event, query, limit = 80) => {
@@ -289,6 +409,10 @@ ipcMain.handle('soundbank:choose', async () => {
   return { canceled: false, path: filePath, name: path.basename(filePath) };
 });
 ipcMain.handle('soundbank:status', () => ({ path: settings.soundBankPath || '', name: settings.soundBankPath ? path.basename(settings.soundBankPath) : '' }));
+ipcMain.handle('metadata:resolve', async (_event, song) => {
+  try { return await resolveSongMetadata(song); }
+  catch (error) { return { source: 'MusicBrainz', matched: false, error: error.message || String(error), title: song?.title || '', artist: song?.artist || '', album: '', releaseDate: '', coverArtUrl: '', composers: [] }; }
+});
 
 ipcMain.handle('font:choose', async () => {
   const result = await dialog.showOpenDialog({
@@ -317,6 +441,7 @@ ipcMain.handle('app:toggle-fullscreen', event => {
 
 app.whenReady().then(() => {
   settings = { ...settings, ...readJson(settingsFile(), {}) };
+  metadataCache = readJson(metadataCacheFile(), {}) || {};
   loadCachedLibrary();
   if (settings.soundBankPath && fs.existsSync(settings.soundBankPath)) allowedBinaryPaths.add(canonicalPath(settings.soundBankPath));
   createWindow();
