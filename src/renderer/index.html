@@ -208,6 +208,7 @@
           <span id="playState">PLAY</span>
           <span>KEY <b id="keyValue">0</b></span>
           <span>TEMPO <b id="tempoValue">100%</b></span>
+          <span id="lyricDelayHud">LYRIC +0.00s</span>
         </div>
       </div>
     </section>
@@ -261,11 +262,12 @@
           <div class="setting-block">
             <label for="systemFont">SYSTEM FONT</label>
             <select id="systemFont">
+              <option value="system">Segoe UI</option>
+              <option value="clean">Clean / Aptos</option>
               <option value="condensed">Condensed</option>
-              <option value="system">System</option>
-              <option value="rounded">Rounded</option>
-              <option value="mono">Mono</option>
+              <option value="karaoke">Karaoke Heavy</option>
               <option value="serif">Serif</option>
+              <option value="mono">Mono</option>
               <option value="custom">Custom file</option>
             </select>
             <button class="inline-action" data-action="system-font-file">CHOOSE FONT FILE</button>
@@ -274,14 +276,21 @@
           <div class="setting-block">
             <label for="lyricFont">LYRIC FONT</label>
             <select id="lyricFont">
+              <option value="karaoke">Karaoke Heavy</option>
+              <option value="system">Segoe UI</option>
+              <option value="clean">Clean / Aptos</option>
               <option value="condensed">Condensed</option>
-              <option value="system">System</option>
-              <option value="rounded">Rounded</option>
               <option value="serif">Serif</option>
               <option value="mono">Mono</option>
               <option value="custom">Custom file</option>
             </select>
             <button class="inline-action" data-action="lyric-font-file">CHOOSE FONT FILE</button>
+          </div>
+
+          <div class="setting-block">
+            <label for="lyricDelay">LYRIC SYNC / DELAY <span id="lyricDelayValue">+0.00s</span></label>
+            <input id="lyricDelay" type="range" min="-5000" max="5000" step="50" value="0" />
+            <small class="setting-help">Positive = lyrics later · [ / ] changes 0.10s while singing · \ resets</small>
           </div>
 
           <div class="setting-block">
@@ -300,7 +309,7 @@
           </div>
         </div>
 
-        <div class="system-hint">SPACE pause/resume · ESC stop/close · F1 search · F2 media · F3 visuals · F4 system</div>
+        <div class="system-hint">SPACE pause/resume · [ / ] lyric sync ±0.10s · \ reset lyric sync · ESC stop · F1 search · F2 media · F3 visuals · F4 system</div>
       </div>
       <div class="panel-sidecopy">F4 / MACHINE SETUP</div>
     </section>
