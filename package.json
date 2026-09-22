@@ -1,6 +1,6 @@
 {
   "name": "openkrk",
-  "version": "0.2.0-dev",
+  "version": "0.3.0-dev",
   "private": false,
   "description": "Open-source karaoke machine with BGV-first presentation, MIDI/KAR playback, precise lyrics and large-library indexing.",
   "main": "src/main/main.cjs",
