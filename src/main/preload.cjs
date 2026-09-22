@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('openkrk', {
   rescanLibrary: () => ipcRenderer.invoke('library:rescan'),
   getLibraryStatus: () => ipcRenderer.invoke('library:status'),
   getLatestSongs: limit => ipcRenderer.invoke('library:latest', limit),
+  discoverCurrentSongs: (limit, force = false) => ipcRenderer.invoke('library:discover-current', limit, force),
   findSongByCode: code => ipcRenderer.invoke('library:find-code', code),
   searchSongs: (query, limit) => ipcRenderer.invoke('library:search', query, limit),
   chooseSoundBank: () => ipcRenderer.invoke('soundbank:choose'),
