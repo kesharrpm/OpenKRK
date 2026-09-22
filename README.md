@@ -16,6 +16,10 @@ Early production. The application is being rebuilt from first principles in this
 - **Reliable playback:** persistent SoundFont engine, bounded caches, cancellation, preload, and recovery paths.
 - **TV readability:** every playback surface is designed for distance viewing and moving backgrounds.
 
+## Room Player 0.3 prototype
+
+The `feature/platinum-karaoke-player` branch contains the PC-first loading/setup/new-songs/player flow, local freshness detection, SpessaSynth playback, BGV rotation, and on-demand MusicBrainz/Cover Art Archive metadata. See `docs/ROOM_PLAYER_0.3.md` for the flow and architecture.
+
 ## Development
 
 Active work happens on production branches and lands through reviewed pull requests.
